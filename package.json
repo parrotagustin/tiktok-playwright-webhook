@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Minimal webhook for Make -> Node -> Playwright",
   "main": "server.js",
+  "type": "module",
   "scripts": {
     "start": "node server.js",
     "postinstall": "npx playwright install --with-deps chromium"
