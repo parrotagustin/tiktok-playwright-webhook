@@ -20,9 +20,12 @@ app.post("/run", async (req, res) => {
   console.log("Nuevo request recibido:", { video_url, comment_text, reply_text, account });
 
   try {
-    const browser = await chromium.launch({ headless: true });
-    const page = await browser.newPage();
+    const browser = await chromium.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"]
+    });
 
+    const page = await browser.newPage();
     await page.goto(video_url, { waitUntil: "domcontentloaded", timeout: 60000 });
 
     // Aquí luego añadiremos la lógica real (login, comentar, etc.)
@@ -36,5 +39,5 @@ app.post("/run", async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-const HOST = '0.0.0.0';
+const HOST = "0.0.0.0";
 app.listen(PORT, HOST, () => console.log(`Servidor activo en http://${HOST}:${PORT}`));
