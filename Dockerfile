@@ -1,42 +1,20 @@
-# Usa una imagen oficial de Node.js
-FROM node:18-bullseye
+# Imagen base ligera con Node.js
+FROM mcr.microsoft.com/playwright:v1.48.2-jammy
 
-# Instala las librerías necesarias para Playwright + Chromium
-RUN apt-get update && apt-get install -y \
-    libglib2.0-0 \
-    libnss3 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libcups2 \
-    libdrm2 \
-    libxkbcommon0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxrandr2 \
-    libgbm1 \
-    libasound2 \
-    libpangocairo-1.0-0 \
-    libpango-1.0-0 \
-    libcairo2 \
-    libatspi2.0-0 \
-    libgtk-3-0 \
-    fonts-liberation \
-    && rm -rf /var/lib/apt/lists/*
-
-# Configura el directorio de trabajo
+# Establece el directorio de trabajo
 WORKDIR /app
 
-# Copia los archivos del proyecto
+# Copia los archivos de configuración primero (para cache eficiente)
+COPY package*.json ./
+
+# Instala dependencias sin cache
+RUN npm install --omit=dev
+
+# Copia el resto del código fuente
 COPY . .
 
-# Instala las dependencias de Node
-RUN npm install
+# Expone el puerto (Railway usa PORT automáticamente)
+EXPOSE 3000
 
-# Instala los navegadores de Playwright (solo Chromium)
-RUN npx playwright install --with-deps chromium
-
-# Expone el puerto
-EXPOSE 8080
-
-# Comando para ejecutar la app
+# Comando para iniciar el servidor
 CMD ["node", "server.js"]
