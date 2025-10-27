@@ -25,16 +25,14 @@ app.post("/run", async (req, res) => {
       args: ["--no-sandbox", "--disable-setuid-sandbox"]
     });
 
-    const context = await browser.newContext({
-      storageState: "storageState.json"
-    });
+    const context = await browser.newContext(); // <- sin storageState.json
 
     const page = await context.newPage();
     await page.goto(video_url, { waitUntil: "domcontentloaded", timeout: 60000 });
 
     await browser.close();
 
-    res.json({ ok: true, message: "Sesión verificada y video accesible (modo pre-publicación)" });
+    res.json({ ok: true, message: "Video accesible (modo test sin login)" });
   } catch (err) {
     console.error("Error en Playwright:", err);
     res.status(500).json({ ok: false, error: err.message });
