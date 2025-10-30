@@ -37,19 +37,30 @@ app.post("/run", async (req, res) => {
     // Espera breve para asegurar carga de comentarios
     await page.waitForTimeout(5000);
 
-    // Buscamos el comentario
-    const commentSelector = `text="${comment_text}"`;
-    const comment = await page.locator(commentSelector).first();
+    // Esperar a que los comentarios carguen
+    await page.waitForSelector('[data-e2e="comment-item"]', { timeout: 15000 });
 
-    if (await comment.count() === 0) {
-      throw new Error("Comentario no encontrado");
+    // Buscar el comentario por coincidencia parcial
+    const comments = await page.$$('[data-e2e="comment-item"]');
+    let targetComment = null;
+
+    for (const el of comments) {
+      const text = await el.textContent();
+      if (text && text.toLowerCase().includes(comment_text.toLowerCase().slice(0, 10))) {
+        targetComment = el;
+        break;
+      }
     }
 
-    await comment.scrollIntoViewIfNeeded();
+    if (!targetComment) {
+      throw new Error("Comentario no encontrado o no visible");
+    }
+
+    await targetComment.scrollIntoViewIfNeeded();
     console.log("💬 Comentario encontrado, abriendo campo de respuesta...");
 
     // Abrir campo de respuesta
-    const replyButton = await comment.locator('button:has-text("Responder")');
+    const replyButton = await targetComment.locator('button:has-text("Responder")');
     await replyButton.click({ delay: 300 });
     await page.waitForTimeout(1000);
 
