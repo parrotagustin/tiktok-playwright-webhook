@@ -1,26 +1,21 @@
-# 🧱 Imagen base de Node con soporte Playwright estable
-FROM mcr.microsoft.com/playwright:v1.45.0-jammy
+# Imagen base ligera con Node y soporte Playwright
+FROM mcr.microsoft.com/playwright:v1.46.0-focal
 
-# 📂 Definir directorio de trabajo
+# Crear directorio de trabajo
 WORKDIR /app
 
-# 🧾 Copiar archivos de dependencias primero (mejor caché)
+# Copiar archivos de dependencias
 COPY package*.json ./
 
-# ⚙️ Instalar dependencias y Chromium con todas las librerías necesarias
-RUN npm install && npx playwright install --with-deps chromium
+# Instalar dependencias Node sin volver a instalar Chromium (ya viene incluido)
+RUN npm ci
 
-# 📁 Copiar todo el código del proyecto
+# Copiar el resto del proyecto
 COPY . .
 
-# 🔐 Definir variable de entorno con la ruta del storageState.json
-ENV STORAGE_STATE_PATH=/app/local/storageState.json
+# Exponer el puerto dinámico que Railway asigna
+ENV PORT=8080
+EXPOSE 8080
 
-# 🧹 Reducir tamaño de imagen eliminando caché innecesaria
-RUN rm -rf /var/lib/apt/lists/* /root/.cache
-
-# ⚡ Exponer el puerto donde corre Express
-EXPOSE 3000
-
-# 🚀 Comando de inicio del servidor
+# Comando de ejecución
 CMD ["npm", "start"]
