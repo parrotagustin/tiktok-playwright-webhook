@@ -37,11 +37,17 @@ app.post("/run", async (req, res) => {
     // Espera breve para asegurar carga de comentarios
     await page.waitForTimeout(5000);
 
-    // Esperar a que los comentarios carguen
-    await page.waitForSelector('[data-e2e="comment-item"]', { timeout: 15000 });
+    // Esperar a que los comentarios estén visibles (mayor tolerancia)
+    try {
+      await page.waitForSelector('div[data-e2e*="comment"]', { timeout: 30000 });
+      console.log("💬 Comentarios detectados correctamente");
+    } catch {
+      console.log("⚠️ No se encontraron comentarios con el selector principal, probando alternativa...");
+      await page.waitForTimeout(5000);
+    }
 
     // Buscar el comentario por coincidencia parcial
-    const comments = await page.$$('[data-e2e="comment-item"]');
+    const comments = await page.$$('[data-e2e*="comment"]');
     let targetComment = null;
 
     for (const el of comments) {
