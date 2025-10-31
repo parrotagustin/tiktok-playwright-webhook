@@ -1,21 +1,18 @@
-# Imagen base ligera con Node y soporte Playwright
-FROM mcr.microsoft.com/playwright:v1.46.0-focal
+# Imagen Playwright alineada con tu versión 1.56.1
+FROM mcr.microsoft.com/playwright:v1.56.1-jammy
 
-# Crear directorio de trabajo
 WORKDIR /app
 
-# Copiar archivos de dependencias
+# Copiamos package.json primero para aprovechar la cache
 COPY package*.json ./
-
-# Instalar dependencias Node sin volver a instalar Chromium (ya viene incluido)
 RUN npm ci
 
-# Copiar el resto del proyecto
+# Copiamos el resto del proyecto (incluye /local/storageState.json)
 COPY . .
 
-# Exponer el puerto dinámico que Railway asigna
+# Forzamos la ruta del storage en tiempo de ejecución (evita confusiones con Shared Variables)
+ENV STORAGE_STATE_PATH=/app/local/storageState.json
 ENV PORT=8080
-EXPOSE 8080
 
-# Comando de ejecución
+EXPOSE 8080
 CMD ["npm", "start"]
