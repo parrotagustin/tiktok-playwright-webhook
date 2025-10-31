@@ -50,40 +50,54 @@ app.post("/run", async (req, res) => {
     await page.waitForLoadState("networkidle", { timeout: 60000 }).catch(() => {});
     console.log("✅ Video cargado correctamente");
 
-    // 🟢 Intentar abrir sección de comentarios si está colapsada
-    try {
-      const openComments = page.locator(
-        '[data-e2e="browse-comment-icon"], [data-e2e*="comment"] button, [aria-label*="Comentarios"], [aria-label*="comment"]'
-      );
-      if (await openComments.first().isVisible({ timeout: 5000 }).catch(() => false)) {
-        await openComments.first().click({ delay: 80 }).catch(() => {});
-        console.log("💬 Panel de comentarios abierto");
+    // 🔹 Cerrar posibles popups de login o consentimiento
+    const selectorsToClose = [
+      'div[role="dialog"] button:has-text("Cerrar")',
+      'div[role="dialog"] button:has-text("Close")',
+      'button:has-text("Aceptar todo")',
+      'button:has-text("Accept all")',
+      '[data-e2e="gdpr_accept_button"]',
+    ];
+    for (const sel of selectorsToClose) {
+      const btn = await page.$(sel);
+      if (btn) {
+        await btn.click().catch(() => {});
+        console.log(`🔹 Cerrado overlay con selector: ${sel}`);
+        await page.waitForTimeout(1000);
       }
-    } catch (e) {
-      console.log("⚠️ No se detectó botón para abrir comentarios");
     }
 
-    // 🟢 Esperar contenedor de comentarios
-    await page.waitForSelector(
-      'div[data-e2e="comment-list"], div[data-e2e*="comment"], ul:has(li:has([data-e2e*="comment"]))',
-      { timeout: 45000 }
-    ).catch(() => console.warn("⚠️ Comentarios no visibles aún"));
+    // 🔹 Intentar abrir panel de comentarios
+    const commentBtn = page.locator(
+      '[data-e2e="browse-comment-icon"], [aria-label*="Comentario"], [aria-label*="comment"]'
+    );
+    if (await commentBtn.first().isVisible().catch(() => false)) {
+      await commentBtn.first().click({ delay: 120 }).catch(() => {});
+      console.log("💬 Panel de comentarios abierto manualmente");
+      await page.waitForTimeout(2000);
+    }
 
-    // 🟢 Scroll incremental para forzar carga completa
-    for (let i = 0; i < 10; i++) {
+    // 🔹 Scroll largo y progresivo
+    for (let i = 0; i < 15; i++) {
       await page.mouse.wheel(0, 1500);
-      await page.waitForTimeout(1000);
+      await page.waitForTimeout(1200);
     }
+
+    // 🔹 Esperar realmente a que carguen comentarios
+    await page.waitForSelector(
+      'div[data-e2e*="comment"], li:has([data-e2e*="comment"]), p, span',
+      { timeout: 60000 }
+    ).catch(() => {});
     console.log("🔎 Buscando comentario...");
 
-    // 🟢 Buscar comentario de forma flexible
+    // 🔹 Búsqueda flexible
     const lowerTarget = (comment_text || "").toLowerCase().slice(0, 20).trim();
-    const comments = await page.$$(
+    const elements = await page.$$(
       'div[data-e2e*="comment"], li:has([data-e2e*="comment"]), p, span'
     );
 
     let targetComment = null;
-    for (const el of comments) {
+    for (const el of elements) {
       const text = (await el.textContent())?.toLowerCase() || "";
       if (text.includes(lowerTarget)) {
         targetComment = el;
@@ -92,53 +106,44 @@ app.post("/run", async (req, res) => {
     }
 
     if (!targetComment) {
-      throw new Error("Comentario no encontrado o no visible después de scrollear");
+      throw new Error("Comentario no encontrado o no visible tras scroll extendido");
     }
 
     await targetComment.scrollIntoViewIfNeeded().catch(() => {});
     console.log("💬 Comentario encontrado, abriendo campo de respuesta...");
 
-    // 🟢 Botón de responder (varias variantes)
+    // 🔹 Botón de respuesta
     const replyButton =
       (await targetComment.$('button:has-text("Responder")')) ||
       (await targetComment.$('[data-e2e*="reply"]')) ||
       (await targetComment.$('button:has-text("Reply")')) ||
-      (await targetComment.$('[aria-label*="Reply"]')) ||
-      (await targetComment.$('[role="button"]:has-text("Responder")'));
-
+      (await targetComment.$('[aria-label*="Reply"]'));
     if (!replyButton) throw new Error("No se encontró el botón de Responder");
-
     await replyButton.click({ delay: 200 });
     await page.waitForTimeout(1500);
 
-    // 🟢 Campo de texto
+    // 🔹 Campo de texto
     const input =
       (await page.$('textarea')) ||
       (await page.$('[contenteditable="true"]')) ||
-      (await page.$('[data-e2e="comment-input"]')) ||
-      (await page.$('div[role="textbox"]'));
-
+      (await page.$('[data-e2e="comment-input"]'));
     if (!input) throw new Error("No se encontró el campo de texto para responder");
 
     await input.click();
     await input.fill(reply_text);
     await page.waitForTimeout(800);
 
-    // 🟢 Botón de publicar
+    // 🔹 Publicar
     const publishBtn =
       (await page.$('button:has-text("Publicar")')) ||
       (await page.$('button:has-text("Post")')) ||
-      (await page.$('[data-e2e*="post"]')) ||
-      (await page.$('[aria-label*="Post"]')) ||
-      (await page.$('button:has-text("Enviar")'));
-
-    if (!publishBtn) throw new Error("No se encontró el botón de Publicar/Enviar");
-
+      (await page.$('[data-e2e*="post"]'));
+    if (!publishBtn) throw new Error("No se encontró el botón de publicar");
     await publishBtn.click({ delay: 300 });
     await page.waitForTimeout(4000);
+
     console.log("✅ Respuesta publicada con éxito");
 
-    // 🟢 Intentar capturar URL (fallback al video)
     const reply_url = video_url;
     await browser.close();
 
