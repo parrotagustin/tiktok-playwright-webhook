@@ -11,7 +11,7 @@ app.get("/", (_req, res) => {
 });
 
 app.post("/run", async (req, res) => {
-  const { video_url, comment_text, reply_text, account, row_number } = req.body || {};
+  const { video_url, comment_text, reply_text, account, row_number, cid } = req.body || {};
 
   // ✅ Validación robusta de parámetros
   if (!video_url || !reply_text || !row_number) {
@@ -33,6 +33,7 @@ app.post("/run", async (req, res) => {
     reply_text,
     account: account || "main_account",
     row_number,
+    cid,
   });
 
   try {
@@ -85,28 +86,39 @@ app.post("/run", async (req, res) => {
 
     // 🔹 Esperar realmente a que carguen comentarios
     await page.waitForSelector(
-      'div[data-e2e*="comment"], li:has([data-e2e*="comment"]), p, span',
+      'div[data-e2e*="comment"], li:has([data-e2e*="comment"]), [data-cid], [data-e2e*="comment-item"], p, span',
       { timeout: 60000 }
     ).catch(() => {});
     console.log("🔎 Buscando comentario...");
 
-    // 🔹 Búsqueda flexible
-    const lowerTarget = (comment_text || "").toLowerCase().slice(0, 20).trim();
-    const elements = await page.$$(
-      'div[data-e2e*="comment"], li:has([data-e2e*="comment"]), p, span'
-    );
-
+    // 🔹 Buscar comentario por cid si está disponible
     let targetComment = null;
-    for (const el of elements) {
-      const text = (await el.textContent())?.toLowerCase() || "";
-      if (text.includes(lowerTarget)) {
-        targetComment = el;
-        break;
+    if (cid) {
+      console.log(`🧩 Buscando comentario por cid: ${cid}`);
+      targetComment =
+        (await page.$(`[data-e2e*="comment-item-${cid}"]`)) ||
+        (await page.$(`[data-cid="${cid}"]`)) ||
+        (await page.$(`div:has([data-cid="${cid}"])`));
+    }
+
+    // 🔹 Fallback a búsqueda por texto
+    if (!targetComment) {
+      console.log("🔍 Buscando comentario por texto (fallback)");
+      const lowerTarget = (comment_text || "").toLowerCase().slice(0, 20).trim();
+      const elements = await page.$$(
+        'div[data-e2e*="comment"], li:has([data-e2e*="comment"]), [data-cid], [data-e2e*="comment-item"], p, span'
+      );
+      for (const el of elements) {
+        const text = (await el.textContent())?.toLowerCase() || "";
+        if (text.includes(lowerTarget)) {
+          targetComment = el;
+          break;
+        }
       }
     }
 
     if (!targetComment) {
-      throw new Error("Comentario no encontrado o no visible tras scroll extendido");
+      throw new Error("Comentario no encontrado ni por cid ni por texto");
     }
 
     await targetComment.scrollIntoViewIfNeeded().catch(() => {});
