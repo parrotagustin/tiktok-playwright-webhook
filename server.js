@@ -61,6 +61,7 @@ async function ensureLoggedIn(page) {
   }
 }
 
+// ---------- Otras funciones ----------
 async function closeOverlays(page) {
   const selectors = [
     'div[role="dialog"] button:has-text("Cerrar")',
@@ -104,12 +105,10 @@ async function hydrateComments(page, iterations = 25) {
   console.log("✅ Scroll completado.");
 }
 
-// ---------- Detección avanzada de comentarios ----------
 async function findCommentHandle(page, { cid, comment_text }) {
   const targetNorm = normalize(comment_text);
   console.log("🔍 Buscando comentario:", targetNorm);
 
-  // 1️⃣ Buscar por CID directo
   if (cid) {
     const byCid = await page.$(`[data-cid="${cid}"], [data-e2e="comment-item-${cid}"]`);
     if (byCid) {
@@ -118,11 +117,9 @@ async function findCommentHandle(page, { cid, comment_text }) {
     }
   }
 
-  // 2️⃣ Buscar por estructura conocida
   const candidates = await page.$$(
     '[data-e2e*="comment-item"], [data-cid], .DivCommentItemWrapper, .DivCommentContentContainer'
   );
-
   console.log(`🔎 Detectados ${candidates.length} posibles comentarios`);
   for (const el of candidates) {
     const txt = normalize(await el.textContent());
@@ -131,21 +128,29 @@ async function findCommentHandle(page, { cid, comment_text }) {
       console.log("🎯 Comentario encontrado por texto visible (DOM estructural).");
       return el;
     }
-
-    // fuzzy matching (sin signos)
-    const diff = Math.abs(txt.length - targetNorm.length);
-    if (diff <= 3 && (txt.includes(targetNorm.slice(0, -1)) || targetNorm.includes(txt.slice(0, -1)))) {
-      console.log("🎯 Comentario encontrado por fuzzy matching (tolerancia ±1 char).");
-      return el;
-    }
   }
 
   console.warn("⚠️ No se encontró el comentario.");
   return null;
 }
 
-// ---------- Endpoint principal ----------
+// ---------- Endpoints ----------
 app.get("/", (_req, res) => res.json({ status: "ok", message: "Webhook activo" }));
+
+app.get("/check-login", async (_req, res) => {
+  let browser;
+  try {
+    const { browser: b, page } = await newBrowserContext();
+    browser = b;
+    const status = await ensureLoggedIn(page);
+    await browser.close();
+    if (status.ok) return res.json({ ok: true, message: "Sesión TikTok activa ✅" });
+    return res.json({ ok: false, message: "Sesión inactiva ❌", reason: status.reason });
+  } catch (err) {
+    if (browser) await browser.close().catch(() => {});
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
 
 app.post("/run", async (req, res) => {
   const { video_url, comment_text, reply_text, row_number, cid } = req.body || {};
@@ -162,26 +167,12 @@ app.post("/run", async (req, res) => {
   try {
     await Promise.race([
       (async () => {
-        // Crear contexto inicial
-        let { browser: b, page } = await newBrowserContext();
+        const { browser: b, page } = await newBrowserContext();
         browser = b;
 
-        // Verificar sesión
-        let status = await ensureLoggedIn(page);
-        if (!status.ok) {
-          console.log("⚠️ Sesión no activa. Reintentando en 3s...");
-          await browser.close().catch(() => {});
-          await new Promise((r) => setTimeout(r, 3000));
+        const status = await ensureLoggedIn(page);
+        if (!status.ok) throw new Error("Sesión no activa en TikTok.");
 
-          const retry = await newBrowserContext();
-          browser = retry.browser;
-          page = retry.page;
-
-          status = await ensureLoggedIn(page);
-          if (!status.ok) throw new Error("Sesión no activa en TikTok tras reintento.");
-        }
-
-        // Abrir video y comentarios
         await page.goto(video_url, { waitUntil: "domcontentloaded", timeout: 60000 });
         await closeOverlays(page);
         await hydrateComments(page, 25);
@@ -234,6 +225,18 @@ app.post("/run", async (req, res) => {
 });
 
 // ---------- Boot ----------
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 const HOST = "0.0.0.0";
-app.listen(PORT, HOST, () => console.log(`🚀 Servidor activo en http://${HOST}:${PORT}`));
+app.listen(PORT, HOST, async () => {
+  console.log(`🚀 Servidor activo en http://${HOST}:${PORT}`);
+  console.log("🔐 Verificando sesión de TikTok...");
+  try {
+    const { browser, page } = await newBrowserContext();
+    const status = await ensureLoggedIn(page);
+    await browser.close();
+    if (status.ok) console.log("✅ Sesión TikTok activa (cookies válidas)");
+    else console.log("❌ Sesión inactiva o cookies vencidas, vuelve a subir un storageState.json nuevo");
+  } catch (err) {
+    console.error("⚠️ No se pudo verificar la sesión:", err.message);
+  }
+});
