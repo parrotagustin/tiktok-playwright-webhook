@@ -9,8 +9,47 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
+// ✅ Endpoint base para verificar que el servidor esté activo
 app.get("/", (_req, res) => {
   res.json({ status: "ok", message: "Webhook activo" });
+});
+
+// 🔍 Endpoint para verificar si la sesión TikTok está activa
+app.get("/check-login", async (_req, res) => {
+  try {
+    const browser = await chromium.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+
+    const context = await browser.newContext({
+      storageState: process.env.STORAGE_STATE_PATH || "./local/storageState.json",
+    });
+
+    const page = await context.newPage();
+    await page.goto("https://www.tiktok.com", {
+      waitUntil: "domcontentloaded",
+      timeout: 60000,
+    });
+    await page.waitForTimeout(5000);
+
+    const loggedUser = await page.evaluate(() => {
+      const el = document.querySelector(
+        '[data-e2e="profile-icon"] img, [data-e2e="top-login-avatar"] img'
+      );
+      return el ? el.getAttribute("alt") || "user_detected" : null;
+    });
+
+    await browser.close();
+
+    if (loggedUser) {
+      res.json({ ok: true, message: "Sesión TikTok activa ✅", loggedUser });
+    } else {
+      res.json({ ok: false, message: "No se detectó sesión activa ❌" });
+    }
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 app.post("/run", async (req, res) => {
