@@ -1,6 +1,9 @@
 import express from "express";
 import cors from "cors";
 import { chromium } from "playwright";
+import path from "path";
+import { fileURLToPath } from "url";
+import { existsSync } from "fs";
 
 const app = express();
 app.use(cors());
@@ -36,6 +39,15 @@ app.post("/run", async (req, res) => {
     cid,
   });
 
+  // 🗂️ Resolver ruta del storageState
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const STORAGE_STATE =
+    process.env.STORAGE_STATE_PATH ||
+    (existsSync(path.join(__dirname, "storageState.json"))
+      ? path.join(__dirname, "storageState.json")
+      : path.join(__dirname, "local", "storageState.json"));
+  console.log("🗂️ Usando storageState:", STORAGE_STATE);
+
   try {
     const browser = await chromium.launch({
       headless: true,
@@ -43,7 +55,7 @@ app.post("/run", async (req, res) => {
     });
 
     const context = await browser.newContext({
-      storageState: "storageState.json",
+      storageState: STORAGE_STATE,
     });
 
     const page = await context.newPage();
