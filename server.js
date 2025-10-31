@@ -39,22 +39,26 @@ async function newBrowserContext() {
   return { browser, context, page };
 }
 
-// ---------- Funciones auxiliares ----------
 async function ensureLoggedIn(page) {
-  await page.goto("https://www.tiktok.com/settings", {
-    waitUntil: "domcontentloaded",
-    timeout: 60000,
-  });
-  await page.waitForTimeout(2000);
-  if (page.url().includes("/login")) return { ok: false };
+  try {
+    await page.goto("https://www.tiktok.com/settings", {
+      waitUntil: "domcontentloaded",
+      timeout: 60000,
+    });
+    await page.waitForTimeout(2000);
 
-  const hasAvatar = await page
-    .locator('[data-e2e="profile-icon"] img, a[href*="/@"] img')
-    .first()
-    .isVisible()
-    .catch(() => false);
+    if (page.url().includes("/login")) return { ok: false, reason: "redirected_to_login" };
 
-  return { ok: !!hasAvatar };
+    const avatarVisible = await page
+      .locator('[data-e2e="profile-icon"] img, a[href*="/@"] img')
+      .first()
+      .isVisible()
+      .catch(() => false);
+
+    return { ok: !!avatarVisible, reason: avatarVisible ? "ok" : "no_avatar_detected" };
+  } catch {
+    return { ok: false, reason: "navigation_error" };
+  }
 }
 
 async function closeOverlays(page) {
@@ -80,14 +84,18 @@ async function hydrateComments(page, iterations = 25) {
     const btn = await page.$(sel);
     if (btn) {
       await btn.click().catch(() => {});
-      console.log(`✅ Click en botón (${sel})`);
+      console.log(`✅ Click en botón de comentarios (${sel})`);
       await page.waitForTimeout(2500);
       break;
     }
   }
 
   const container = await page.$("div.TUXTabBar-content, div[data-e2e*='comment']");
-  if (!container) return;
+  if (!container) {
+    console.warn("⚠️ No se encontró el contenedor de comentarios.");
+    return;
+  }
+
   console.log("🧭 Scrolleando dentro del panel lateral...");
   for (let i = 0; i < iterations; i++) {
     await container.evaluate((el) => el.scrollBy(0, 1500));
@@ -96,9 +104,12 @@ async function hydrateComments(page, iterations = 25) {
   console.log("✅ Scroll completado.");
 }
 
+// ---------- Detección avanzada de comentarios ----------
 async function findCommentHandle(page, { cid, comment_text }) {
   const targetNorm = normalize(comment_text);
+  console.log("🔍 Buscando comentario:", targetNorm);
 
+  // 1️⃣ Buscar por CID directo
   if (cid) {
     const byCid = await page.$(`[data-cid="${cid}"], [data-e2e="comment-item-${cid}"]`);
     if (byCid) {
@@ -107,11 +118,24 @@ async function findCommentHandle(page, { cid, comment_text }) {
     }
   }
 
-  const all = await page.$$('[data-e2e*="comment"], [data-cid]');
-  for (const el of all) {
+  // 2️⃣ Buscar por estructura conocida
+  const candidates = await page.$$(
+    '[data-e2e*="comment-item"], [data-cid], .DivCommentItemWrapper, .DivCommentContentContainer'
+  );
+
+  console.log(`🔎 Detectados ${candidates.length} posibles comentarios`);
+  for (const el of candidates) {
     const txt = normalize(await el.textContent());
+    if (!txt) continue;
     if (txt.includes(targetNorm)) {
-      console.log("🎯 Comentario encontrado por texto (fuzzy).");
+      console.log("🎯 Comentario encontrado por texto visible (DOM estructural).");
+      return el;
+    }
+
+    // fuzzy matching (sin signos)
+    const diff = Math.abs(txt.length - targetNorm.length);
+    if (diff <= 3 && (txt.includes(targetNorm.slice(0, -1)) || targetNorm.includes(txt.slice(0, -1)))) {
+      console.log("🎯 Comentario encontrado por fuzzy matching (tolerancia ±1 char).");
       return el;
     }
   }
@@ -120,7 +144,7 @@ async function findCommentHandle(page, { cid, comment_text }) {
   return null;
 }
 
-// ---------- Endpoints ----------
+// ---------- Endpoint principal ----------
 app.get("/", (_req, res) => res.json({ status: "ok", message: "Webhook activo" }));
 
 app.post("/run", async (req, res) => {
@@ -138,12 +162,26 @@ app.post("/run", async (req, res) => {
   try {
     await Promise.race([
       (async () => {
-        const { browser: b, page } = await newBrowserContext();
+        // Crear contexto inicial
+        let { browser: b, page } = await newBrowserContext();
         browser = b;
 
-        const status = await ensureLoggedIn(page);
-        if (!status.ok) throw new Error("Sesión no activa en TikTok.");
+        // Verificar sesión
+        let status = await ensureLoggedIn(page);
+        if (!status.ok) {
+          console.log("⚠️ Sesión no activa. Reintentando en 3s...");
+          await browser.close().catch(() => {});
+          await new Promise((r) => setTimeout(r, 3000));
 
+          const retry = await newBrowserContext();
+          browser = retry.browser;
+          page = retry.page;
+
+          status = await ensureLoggedIn(page);
+          if (!status.ok) throw new Error("Sesión no activa en TikTok tras reintento.");
+        }
+
+        // Abrir video y comentarios
         await page.goto(video_url, { waitUntil: "domcontentloaded", timeout: 60000 });
         await closeOverlays(page);
         await hydrateComments(page, 25);
@@ -162,17 +200,15 @@ app.post("/run", async (req, res) => {
         await replyBtn.click({ delay: 150 });
         await page.waitForTimeout(1000);
 
-        // Buscar campo editable real
         let input = await page.$('[data-e2e="comment-input"] [contenteditable="true"]');
         if (!input) input = await page.$('[contenteditable="true"]');
         if (!input) throw new Error("No se encontró campo editable real.");
 
-        // Escribir manualmente mediante evaluate
         await page.evaluate(
           (el, text) => {
             el.focus();
             el.innerText = text;
-            const event = new InputEvent("input", { bubbles: true, cancelable: true });
+            const event = new InputEvent("input", { bubbles: true });
             el.dispatchEvent(event);
           },
           input,
