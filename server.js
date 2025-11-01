@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import { chromium, devices } from "playwright";
+import { chromium } from "playwright";
 import path from "path";
 import { fileURLToPath } from "url";
 import { existsSync } from "fs";
@@ -15,9 +15,9 @@ const PORT = process.env.PORT || 8080;
 const HOST = "0.0.0.0";
 const STORAGE_DIR = process.env.STORAGE_DIR || path.join(__dirname, "local");
 const DEFAULT_STORAGE = process.env.STORAGE_STATE_PATH || path.join(STORAGE_DIR, "storageState.json");
-const DEBUG_HTML_CHARS = 3000;
+const DEBUG_HTML_CHARS = 4000;
 
-// Selectores amplios/robustos
+// ---------- Selectors (wider coverage) ----------
 const COOKIE_ACCEPT_SELECTORS = [
   'button[data-e2e="cookie-banner-accept-button"]',
   'button:has-text("Accept all")',
@@ -38,21 +38,37 @@ const COMMENT_LIST_CANDIDATES = [
   'div[data-e2e="comment-list"]',
   'div[data-e2e="comment-group-list"]',
   'div[data-e2e="comment-container"]',
+  'div[role="dialog"] div[data-e2e*="comment"]',
   'div.TUXTabBar-content'
 ];
 
-const COMMENT_ITEM_SELECTOR = 'div[data-e2e="comment-item"]';
+const COMMENT_ITEM_SELECTORS = [
+  'div[data-e2e="comment-item"]',
+  'li[data-e2e="comment-item"]',
+  'div[data-e2e^="comment-item"]'
+];
+
 const COMMENT_TEXT_SELECTORS = [
   'p[data-e2e="comment-level-1"]',
   'span[data-e2e="comment-text"]',
-  '[data-e2e="comment-text"]'
+  '[data-e2e="comment-text"]',
+  'p[title][data-e2e*="comment"]'
 ];
 
-const REPLY_BUTTON_SEL = 'button[data-e2e^="comment-reply"]';
-const COMMENT_INPUT_SEL = 'div[contenteditable="true"][data-e2e="comment-input"], div[contenteditable="true"][role="textbox"]';
+const REPLY_BUTTON_SELECTORS = [
+  'button[data-e2e^="comment-reply"]',
+  'button:has-text("Responder")'
+];
 
-// ---------- Util ----------
+const COMMENT_INPUT_SELECTORS = [
+  'div[contenteditable="true"][data-e2e="comment-input"]',
+  'div[contenteditable="true"][role="textbox"]',
+  'p[contenteditable="true"]'
+];
+
+// ---------- Utils ----------
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+const now = () => new Date().toISOString();
 
 const norm = (s) =>
   (s || "")
@@ -60,6 +76,7 @@ const norm = (s) =>
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[¿?¡!.,;:()"'`]+/g, " ")
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -76,7 +93,7 @@ async function launchWithStorage(storagePath) {
   });
   const context = await browser.newContext({
     storageState: storagePath,
-    viewport: { width: 1366, height: 900 },
+    viewport: { width: 1440, height: 1000 },
     userAgent:
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
     locale: "es-ES",
@@ -112,15 +129,23 @@ async function ensureLoggedIn(page) {
   }
 }
 
-async function openCommentPanel(page) {
-  for (const sel of COMMENT_PANEL_OPENERS) {
-    const el = await page.$(sel);
-    if (el) {
-      await el.click({ delay: 40 }).catch(() => {});
-      await sleep(1000);
+async function ensureCommentPanelOpen(page) {
+  for (let round = 0; round < 5; round++) {
+    for (const sel of COMMENT_PANEL_OPENERS) {
+      const el = await page.$(sel);
+      if (el) {
+        await el.click({ delay: 40 }).catch(() => {});
+        await sleep(800);
+      }
     }
+    const container = await getCommentContainer(page);
+    if (container) return container;
+    await page.mouse.wheel(0, 1500);
+    await sleep(600);
+    await page.keyboard.press("KeyC").catch(() => {});
+    await sleep(500);
   }
-  return true;
+  return null;
 }
 
 async function getCommentContainer(page) {
@@ -131,21 +156,28 @@ async function getCommentContainer(page) {
   return null;
 }
 
-async function robustScroll(page, container) {
-  for (let i = 0; i < 2; i++) {
-    const didScroll = await container.evaluate((el) => {
-      const before = el.scrollTop;
-      el.scrollBy(0, 1200);
-      return el.scrollTop !== before;
-    }).catch(() => false);
-    if (didScroll) return true;
+async function waitCommentItems(page, timeout = 20000) {
+  for (const sel of COMMENT_ITEM_SELECTORS) {
+    try {
+      await page.waitForSelector(sel, { timeout });
+      return;
+    } catch (_) {}
   }
-  await page.mouse.wheel(0, 1200);
-  return true;
 }
 
-async function waitCommentItems(page, timeout = 15000) {
-  await page.waitForSelector(COMMENT_ITEM_SELECTOR, { timeout }).catch(() => {});
+async function robustScroll(page, container) {
+  for (let i = 0; i < 2; i++) {
+    const didScroll = await container
+      .evaluate((el) => {
+        const before = el.scrollTop;
+        el.scrollTop = el.scrollTop + 1200;
+        return el.scrollTop !== before;
+      })
+      .catch(() => false);
+    if (didScroll) return true;
+  }
+  await page.mouse.wheel(0, 1300);
+  return true;
 }
 
 async function getItemText(node) {
@@ -168,44 +200,60 @@ function fuzzyScore(a, b) {
 
 async function findCommentNode(page, { cid, text }) {
   if (cid) {
-    const byCid = await page.$$(`*[data-e2e*="${cid}"], *[id*="${cid}"], [data-cid*="${cid}"]`);
-    if (byCid?.length) return byCid[0];
+    const cidMatches = await page.$$(`*[data-e2e*="${cid}"], *[id*="${cid}"], [data-cid*="${cid}"]`);
+    if (cidMatches?.length) return cidMatches[0];
   }
   const target = norm(text || "");
   if (!target) return null;
-  const items = await page.$$(COMMENT_ITEM_SELECTOR);
+
+  let items = [];
+  for (const sel of COMMENT_ITEM_SELECTORS) {
+    const batch = await page.$$(sel);
+    if (batch?.length) items = items.concat(batch);
+  }
+
   for (const node of items) {
     const raw = await getItemText(node);
     const nraw = norm(raw);
     if (!nraw) continue;
     if (nraw.includes(target) || target.includes(nraw)) return node;
-    if (fuzzyScore(nraw, target) >= 0.55) return node;
+    if (fuzzyScore(nraw, target) >= 0.5) return node;
   }
   return null;
 }
 
 async function replyToComment(page, commentNode, replyText) {
   await commentNode.scrollIntoViewIfNeeded();
-  await sleep(300);
-  await page.mouse.move(10, 10);
+  await sleep(250);
   const box = await commentNode.boundingBox();
-  if (box) await page.mouse.move(box.x + box.width / 2, box.y + 10);
-  const replyBtn = await commentNode.$(REPLY_BUTTON_SEL);
+  if (box) {
+    await page.mouse.move(box.x + box.width / 2, Math.max(0, box.y + 10));
+    await sleep(200);
+  }
+  let replyBtn = null;
+  for (const sel of REPLY_BUTTON_SELECTORS) {
+    replyBtn = await commentNode.$(sel);
+    if (replyBtn) break;
+  }
   if (!replyBtn) throw new Error("No encontré el botón de Responder en el comentario");
-  await replyBtn.click({ delay: 40 });
+  await replyBtn.click({ delay: 30 });
   await sleep(300);
-  const input = await page.$(COMMENT_INPUT_SEL);
+  let input = null;
+  for (const sel of COMMENT_INPUT_SELECTORS) {
+    input = await page.$(sel);
+    if (input) break;
+  }
   if (!input) throw new Error("No encontré el input de comentarios");
   await input.click();
   await page.keyboard.type(replyText, { delay: 8 });
   await page.keyboard.press("Enter");
-  await sleep(1000);
+  await sleep(900);
   return true;
 }
 
-// ---------- Rutas ----------
+// ---------- Routes ----------
 app.get("/", (_req, res) => {
-  res.json({ ok: true, message: "Webhook activo", ts: new Date().toISOString() });
+  res.json({ ok: true, message: "Webhook activo", ts: now() });
 });
 
 app.get("/check-login", async (_req, res) => {
@@ -242,19 +290,23 @@ app.post("/run", async (req, res) => {
     await page.goto(video_url, { waitUntil: "domcontentloaded", timeout: 45000 });
     await sleep(1500);
     await acceptCookiesIfAny(page);
-    await openCommentPanel(page);
-    await waitCommentItems(page, 15000);
-    const container = await getCommentContainer(page);
-    if (!container) throw new Error("No se encontró el contenedor de comentarios");
+    let container = await ensureCommentPanelOpen(page);
+    if (!container) {
+      await page.mouse.wheel(0, 2000);
+      await sleep(700);
+      container = await ensureCommentPanelOpen(page);
+    }
+    if (!container) throw new Error("No pude abrir el panel de comentarios");
+    await waitCommentItems(page, 20000);
     let found = null;
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 24; i++) {
       found = await findCommentNode(page, { cid, text: comment_text });
       if (found) break;
       await robustScroll(page, container);
-      await sleep(500);
+      await sleep(450);
     }
     if (!found) {
-      const debugHtml = container ? await container.innerHTML() : "";
+      const debugHtml = container ? await container.innerHTML() : await page.content();
       throw new Error("No encontré el comentario (ni por cid ni por texto) ::DEBUG:: " + debugHtml.slice(0, DEBUG_HTML_CHARS));
     }
     await replyToComment(page, found, reply_text);
@@ -267,6 +319,7 @@ app.post("/run", async (req, res) => {
   }
 });
 
+// ---------- Boot ----------
 app.listen(PORT, HOST, () => {
   console.log(`🚀 Servidor activo en http://${HOST}:${PORT}`);
 });
