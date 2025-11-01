@@ -41,9 +41,10 @@ const COMMENT_PANEL_OPENERS = [
   'button[data-e2e="comment-icon"]',
   'button[data-e2e="browse-video-comments"]',
   'button[aria-label*="comment"]',
-  'button:has(svg[data-e2e*="comment"])',
-  'div[data-e2e="comment-top-hover"]',
-  'span:has-text("Comentarios")'
+  'button[aria-label*="comentarios"]',
+  'button[id="comments"]',
+  'span:has-text("Comentarios")',
+  'span:has-text("Comments")'
 ];
 
 const COMMENT_LIST_CANDIDATES = [
@@ -69,7 +70,8 @@ const COMMENT_TEXT_SELECTORS = [
 
 const REPLY_BUTTON_SELECTORS = [
   'button[data-e2e^="comment-reply"]',
-  'button:has-text("Responder")'
+  'button:has-text("Responder")',
+  'button:has-text("Reply")'
 ];
 
 const COMMENT_INPUT_SELECTORS = [
@@ -93,6 +95,14 @@ const norm = (s) =>
     .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+
+function isSimilar(a, b) {
+  const na = norm(a);
+  const nb = norm(b);
+  if (!na || !nb) return false;
+  if (na.includes(nb) || nb.includes(na)) return true;
+  return fuzzyScore(na, nb) >= 0.45;
+}
 
 function storagePathForAccount(account) {
   if (!account) return DEFAULT_STORAGE;
@@ -252,10 +262,7 @@ async function findCommentNode(page, { cid, text }) {
   }
   for (const node of items) {
     const raw = await getItemText(node);
-    const nraw = norm(raw);
-    if (!nraw) continue;
-    if (nraw.includes(target) || target.includes(nraw)) return node;
-    if (fuzzyScore(nraw, target) >= 0.5) return node;
+    if (isSimilar(raw, text)) return node;
   }
   return null;
 }
