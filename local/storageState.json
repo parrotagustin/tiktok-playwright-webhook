@@ -20,12 +20,30 @@
     },
     {
       "domain": ".tiktok.com",
+      "name": "sessionid_ss",
+      "path": "/",
+      "secure": true,
+      "httpOnly": true,
+      "sameSite": "Lax",
+      "value": "8cfeaf51f7d8a4337866901c9581f591"
+    },
+    {
+      "domain": ".tiktok.com",
+      "name": "sid_guard",
+      "path": "/",
+      "secure": true,
+      "httpOnly": true,
+      "sameSite": "Lax",
+      "value": "8cfeaf51f7d8a4337866901c9581f591|1761771138|15552000|Mon, 27-Apr-2026 20:52:18 GMT"
+    },
+    {
+      "domain": ".tiktok.com",
       "name": "msToken",
       "path": "/",
       "secure": true,
       "httpOnly": false,
       "sameSite": "Lax",
-      "value": "4uli9ZRppBDuCjuNZsuntywI0LuklRBuEh6KBQA_XXk1VLnnpZqdeZYmYhdCsOj07a9bIdRp5-zZVqNS7c43rJyHhdw8_364PKUunHJZ9zky4c-rCWnq8wnzgiKq6agFHrGy2qdTc64L_r7r-JW4xCiOpg=="
+      "value": "rcdGvq9NfEPYNjOSygJRSlHRGPMt5h7Q8DYl5Sxpx2i6_ODyF0OtdINqjFr43RE_Yj5slto95KfRZIByv-9NBjMlgR3w1fi3RgjQdo9Xazgej5HjcbF4D9MwLFcxSRhEu0ryn7b74008SWc="
     },
     {
       "domain": ".tiktok.com",
@@ -34,14 +52,14 @@
       "secure": true,
       "httpOnly": true,
       "sameSite": "Lax",
-      "value": "55ab297b232c52b5af4db808b878b3102503e090c22732e086d4f87cdd1697b93450c38e7be065d820b0ec2136a0713a877297f540f9e47594b91ac0c6bf8dde523bbbabb2fa381bd1598f5a60a12225"
+      "value": "2289df33e82a9c7ecab495421807fceda62ed02e9a27cd72a41a5eedfa82434c20f4060448153f2131e2ba633872c4af01f70669767fd9779f0df9b3dc9b3c9be8ab3c17e01dda2f71ac3634442c0434"
     },
     {
       "domain": ".tiktok.com",
       "name": "passport_auth_status",
       "path": "/",
-      "httpOnly": true,
       "secure": true,
+      "httpOnly": true,
       "sameSite": "Lax",
       "value": "1f3772f94700b881d597286f2d17e4a0%2C"
     },
@@ -52,7 +70,7 @@
       "secure": true,
       "httpOnly": true,
       "sameSite": "Lax",
-      "value": "1%7CCdCS2bcgo_69Kep-O1xe0Ws-Y-axLGqL2lh4VsMAdnw%7C1761939237%7Cdf09e72f5fb7ce97b3f5b72102025375168e1eb8a8eacba9c10f5e3249d61115"
+      "value": "1%7CCdCS2bcgo_69Kep-O1xe0Ws-Y-axLGqL2lh4VsMAdnw%7C1761959397%7C013b2aa212cf2a654a3b73f69426697119f707d92b57370c5f5e7d8c132998e1"
     }
   ],
   "origins": []

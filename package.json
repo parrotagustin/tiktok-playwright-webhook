@@ -1,17 +1,16 @@
 {
   "name": "tiktok-playwright-webhook",
-  "version": "1.0.0",
-  "description": "Minimal webhook for Make -> Node -> Playwright",
+  "version": "1.0.1",
+  "description": "Webhook Make -> Node -> Playwright para responder comentarios en TikTok",
   "main": "server.js",
   "type": "module",
   "scripts": {
-    "start": "node server.js",
-    "postinstall": "npx playwright install --with-deps chromium"
+    "start": "node server.js"
   },
   "dependencies": {
+    "cors": "^2.8.5",
     "express": "^4.19.2",
-    "playwright": "^1.56.1",
-    "cors": "^2.8.5"
+    "playwright": "^1.56.1"
   },
   "engines": {
     "node": ">=18"
