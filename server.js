@@ -5,401 +5,116 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { existsSync } from "fs";
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Paths y defaults
 const PORT = process.env.PORT || 8080;
 const HOST = "0.0.0.0";
 const STORAGE_DIR = process.env.STORAGE_DIR || path.join(__dirname, "local");
 const DEFAULT_STORAGE = process.env.STORAGE_STATE_PATH || path.join(STORAGE_DIR, "storageState.json");
-const DEBUG_HTML_CHARS = 4000;
-const MAX_RUN_MS = 180000;
 
-const COOKIE_ACCEPT_SELECTORS = [
-  'button[data-e2e="cookie-banner-accept-button"]',
-  'button:has-text("Accept all")',
-  'button:has-text("Aceptar todo")',
-  'button:has-text("Aceptar")'
-];
-
-const OVERLAY_CLOSE_SELECTORS = [
-  'button:has-text("Not now")',
-  'button:has-text("Ahora no")',
-  'button:has-text("Cerrar")',
-  'button:has-text("Close")',
-  'button:has-text("Descargar")',
-  'button:has-text("Download")',
-  'button:has-text("Iniciar sesión")',
-  'button:has-text("Log in")'
-];
-
-const COMMENT_PANEL_OPENERS = [
-  'button[data-e2e="comment-icon"]',
-  'button[data-e2e="browse-video-comments"]',
-  'button[aria-label*="comment"]',
-  'button[aria-label*="comentarios"]',
-  'button[id="comments"]',
-  'span:has-text("Comentarios")',
-  'span:has-text("Comments")'
-];
-
-const COMMENT_LIST_CANDIDATES = [
-  'div[data-e2e="comment-list"]',
-  'div[data-e2e="comment-group-list"]',
-  'div[data-e2e="comment-container"]',
-  'div[role="dialog"] div[data-e2e*="comment"]',
-  'div.TUXTabBar-content'
-];
-
-const COMMENT_ITEM_SELECTORS = [
-  'div[data-e2e="comment-item"]',
-  'li[data-e2e="comment-item"]',
-  'div[data-e2e^="comment-item"]'
-];
-
-const COMMENT_TEXT_SELECTORS = [
-  'p[data-e2e="comment-level-1"]',
-  'span[data-e2e="comment-text"]',
-  '[data-e2e="comment-text"]',
-  'p[title][data-e2e*="comment"]'
-];
-
-const REPLY_BUTTON_SELECTORS = [
-  'button[data-e2e^="comment-reply"]',
-  'button:has-text("Responder")',
-  'button:has-text("Reply")'
-];
-
-const COMMENT_INPUT_SELECTORS = [
-  'div[contenteditable="true"][data-e2e="comment-input"]',
-  'div[contenteditable="true"][role="textbox"]',
-  'p[contenteditable="true"]'
-];
-
-const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
-const randInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
-const humanDelay = async () => sleep(randInt(400, 1200));
-
-const norm = (s) =>
-  (s || "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[¿?¡!.,;:()"'`]+/g, " ")
-    .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-function fuzzyScore(a, b) {
-  const A = new Set(norm(a).split(" "));
-  const B = new Set(norm(b).split(" "));
-  const inter = [...A].filter((t) => B.has(t)).length;
-  return inter / Math.max(1, Math.min(A.size, B.size));
-}
-
-function isSimilar(a, b) {
-  const na = norm(a);
-  const nb = norm(b);
-  if (!na || !nb) return false;
-  if (na.includes(nb) || nb.includes(na)) return true;
-  return fuzzyScore(na, nb) >= 0.45;
-}
-
+// Selección dinámica de archivo de cookies
 function storagePathForAccount(account) {
   if (!account) return DEFAULT_STORAGE;
-  const candidate = path.join(STORAGE_DIR, "accounts", `${account}.json`);
-  return existsSync(candidate) ? candidate : DEFAULT_STORAGE;
+  const specific = path.join(STORAGE_DIR, "accounts", `${account}.json`);
+  return existsSync(specific) ? specific : DEFAULT_STORAGE;
 }
 
-const USER_AGENTS = [
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15"
-];
-
-async function launchWithStorage(storagePath) {
+// Anti-detección y perfil realista
+async function launchBrowser(storagePath) {
   const browser = await chromium.launch({
     headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"]
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-blink-features=AutomationControlled",
+      "--disable-infobars"
+    ]
   });
+
   const context = await browser.newContext({
     storageState: storagePath,
-    viewport: { width: 1440, height: 1000 },
-    userAgent: USER_AGENTS[randInt(0, USER_AGENTS.length - 1)],
     locale: "es-ES",
-    hasTouch: false
+    userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    viewport: { width: 1280, height: 1000 }
   });
+
   const page = await context.newPage();
-  return { browser, context, page };
+  return { browser, page };
 }
 
-async function acceptCookiesIfAny(page) {
-  for (const sel of COOKIE_ACCEPT_SELECTORS) {
-    const btn = await page.$(sel);
-    if (btn) {
-      await btn.click().catch(() => {});
-      await sleep(500);
-      break;
-    }
-  }
-}
-
-async function closeOverlaysIfAny(page) {
-  for (const sel of OVERLAY_CLOSE_SELECTORS) {
-    const btn = await page.$(sel);
-    if (btn) {
-      await btn.click().catch(() => {});
-      await sleep(250);
-    }
-  }
-}
-
-async function pauseMainVideo(page) {
-  try {
-    const video = await page.waitForSelector("video", { timeout: 5000 });
-    if (video) {
-      await page.$eval("video", (el) => el.pause());
-      await sleep(500);
-    }
-  } catch (_) {}
-}
-
-async function ensureCommentPanelOpen(page) {
-  for (let round = 0; round < 5; round++) {
-    for (const sel of COMMENT_PANEL_OPENERS) {
-      const el = await page.$(sel);
-      if (el) {
-        await el.click({ delay: 40 }).catch(() => {});
-        await sleep(800);
-      }
-    }
-    const container = await getCommentContainer(page);
-    if (container) return container;
-    await page.mouse.wheel(0, 1500);
-    await sleep(600);
-  }
-  return null;
-}
-
-async function getCommentContainer(page) {
-  for (const sel of COMMENT_LIST_CANDIDATES) {
-    const c = await page.$(sel);
-    if (c) return c;
-  }
-  return null;
-}
-
-async function waitRealComments(page, timeoutMs = 30000) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const rawNodes = await page.$$(`div[data-e2e*="comment"], li[data-e2e*="comment"]`);
-    if (rawNodes.length > 0) {
-      const withText = await page.$$eval(
-        `div[data-e2e*="comment"], li[data-e2e*="comment"]`,
-        els => els.filter(e => (e.innerText || "").trim().length > 2).length
-      );
-      if (withText > 0) return true;
-    }
-    await page.mouse.wheel(0, 900).catch(()=>{});
-    await page.waitForTimeout(800);
-  }
-  return false;
-}
-
-async function robustScroll(page, container) {
-  for (let i = 0; i < 2; i++) {
-    const didScroll = await container.evaluate(el => {
-      const before = el.scrollTop;
-      el.scrollTop = el.scrollTop + 1200;
-      return el.scrollTop !== before;
-    }).catch(() => false);
-    if (didScroll) return true;
-  }
-  await page.mouse.wheel(0, 1300);
-  return true;
-}
-
-async function getItemText(node) {
-  for (const sel of COMMENT_TEXT_SELECTORS) {
-    const t = await node.$(sel);
-    if (t) {
-      const s = await t.innerText();
-      if (s) return s;
-    }
-  }
-  return await node.innerText();
-}
-
-async function findCommentNode(page, { cid, text }) {
-  if (cid) {
-    const cidMatches = await page.$$(`*[data-e2e*="${cid}"], *[id*="${cid}"], [data-cid*="${cid}"]`);
-    if (cidMatches?.length) return cidMatches[0];
-  }
-  const target = norm(text || "");
-  if (!target) return null;
-  let items = [];
-  for (const sel of COMMENT_ITEM_SELECTORS) {
-    const batch = await page.$$(sel);
-    if (batch?.length) items = items.concat(batch);
-  }
-  for (const node of items) {
-    const raw = await getItemText(node);
-    if (isSimilar(raw, text)) return node;
-  }
-  return null;
-}
-
-async function replyToComment(page, commentNode, replyText) {
-  await commentNode.scrollIntoViewIfNeeded();
-  await sleep(250);
-  const box = await commentNode.boundingBox();
-  if (box) {
-    await page.mouse.move(box.x + box.width / 2, Math.max(0, box.y + 10));
-    await sleep(200);
-  }
-  let replyBtn = null;
-  for (const sel of REPLY_BUTTON_SELECTORS) {
-    replyBtn = await commentNode.$(sel);
-    if (replyBtn) break;
-  }
-  if (!replyBtn) throw new Error("No encontré el botón de Responder en el comentario");
-  await replyBtn.click({ delay: 30 });
-  await sleep(300);
-  let input = null;
-  for (const sel of COMMENT_INPUT_SELECTORS) {
-    input = await page.$(sel);
-    if (input) break;
-  }
-  if (!input) throw new Error("No encontré el input de comentarios");
-  await input.click();
-  for (const ch of replyText.split("")) {
-    await page.keyboard.type(ch, { delay: randInt(5, 20) });
-  }
-  await humanDelay();
-  await page.keyboard.press("Enter");
-  await sleep(900);
-  return true;
-}
-
-app.get("/", (_req, res) => {
-  res.json({ ok: true, message: "Webhook activo", ts: new Date().toISOString() });
+// Home
+app.get("/", (_, res) => {
+  res.json({ ok: true, message: "Servidor funcionando", time: new Date().toISOString() });
 });
 
-app.get("/check-login", async (_req, res) => {
-  const storage = storagePathForAccount(null);
-  if (!existsSync(storage)) {
-    return res.status(200).json({ ok: false, reason: "missing-storage", storage });
+// Verifica que las cookies funcionan
+app.get("/check-login", async (req, res) => {
+  const storagePath = storagePathForAccount(req.query.account);
+  if (!existsSync(storagePath)) {
+    return res.json({ ok: false, error: "No existe storageState", storagePath });
   }
-  let browser;
+
   try {
-    const { browser: b, page } = await launchWithStorage(storage);
-    browser = b;
-    await page.goto("https://www.tiktok.com", { waitUntil: "domcontentloaded", timeout: 45000 });
-    await page.waitForTimeout(1500);
+    const { browser, page } = await launchBrowser(storagePath);
+    await page.goto("https://www.tiktok.com/", { waitUntil: "domcontentloaded", timeout: 20000 });
+    await page.waitForTimeout(2000);
     await browser.close();
-    return res.json({ ok: true, reason: "avatar-detected" });
-  } catch (e) {
-    if (browser) await browser.close();
-    return res.status(500).json({ ok: false, error: e.message });
+
+    return res.json({ ok: true, session: "valid", storagePath });
+  } catch (err) {
+    return res.json({ ok: false, error: err.message });
   }
 });
 
+// Responder comentario en TikTok
 app.post("/run", async (req, res) => {
-  const { video_url, comment_text, reply_text, account, cid, row_number } = req.body || {};
-  if (!video_url || !reply_text || (!comment_text && !cid)) {
-    return res.status(400).json({ ok: false, error: "Faltan: video_url, reply_text y (comment_text o cid)" });
+  const { video_url, reply_text, comment_text, account } = req.body;
+
+  if (!video_url || !reply_text || !comment_text) {
+    return res.status(400).json({ ok: false, error: "Faltan campos obligatorios" });
   }
-  const storage = storagePathForAccount(account);
-  if (!existsSync(storage)) {
-    return res.status(200).json({ ok: false, error: "storageState no encontrado", storage, row_number });
+
+  const storagePath = storagePathForAccount(account);
+  if (!existsSync(storagePath)) {
+    return res.json({ ok: false, error: "storageState no encontrado", storagePath });
   }
 
   let browser;
-  const killer = setTimeout(() => {
-    try { browser?.close(); } catch {}
-  }, MAX_RUN_MS);
-
   try {
-    const { browser: b, page } = await launchWithStorage(storage);
-    browser = b;
-    await page.goto(video_url, { waitUntil: "domcontentloaded", timeout: 45000 });
-    await page.waitForTimeout(1500);
+    const ctx = await launchBrowser(storagePath);
+    browser = ctx.browser;
+    const page = ctx.page;
 
-    await acceptCookiesIfAny(page);
-    await closeOverlaysIfAny(page);
-    await pauseMainVideo(page);
+    await page.goto(video_url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.waitForTimeout(2000);
 
-    await page.waitForTimeout(1200);
-    for (let i = 0; i < 3; i++) {
-      await page.mouse.wheel(0, 900);
-      await page.waitForTimeout(500);
-    }
+    // Abrir comentarios
+    await page.click('[data-e2e="comment-icon"], [aria-label*="coment"]', { timeout: 8000 }).catch(() => {});
+    await page.waitForTimeout(2000);
 
-    try {
-      await page.waitForSelector('button[data-e2e="comment-icon"], [data-e2e="browse-video-comments"]', { timeout: 6000 });
-    } catch (_){}
-
-    const altBtn = await page.$('span:has-text("comentarios"), span:has-text("Comments"), div[data-e2e*="comment"]');
-    if (altBtn) {
-      await altBtn.click().catch(() => {});
-      await page.waitForTimeout(800);
-    }
-
-    const modalEntry = await page.$('button:has-text("Ver comentarios"), button:has-text("See comments")');
-    if (modalEntry) {
-      await modalEntry.click().catch(() => {});
-      await page.waitForTimeout(1000);
-    }
-
-    await page.waitForLoadState("domcontentloaded").catch(()=>{});
-    await page.waitForTimeout(1500);
-
-    await page.keyboard.press("ArrowDown");
-    await page.waitForTimeout(500);
-    await page.keyboard.press("ArrowDown");
-    await page.waitForTimeout(500);
-    await page.mouse.wheel(0, 1200);
+    // Buscar el comentario por texto aproximado
+    const commentHandle = await page.locator(`text=${comment_text}`).first();
+    await commentHandle.scrollIntoViewIfNeeded();
+    await commentHandle.click({ delay: 60 });
     await page.waitForTimeout(800);
 
-    let container = await ensureCommentPanelOpen(page);
-    if (!container) {
-      await page.mouse.wheel(0, 2000);
-      await page.waitForTimeout(700);
-      container = await ensureCommentPanelOpen(page);
-    }
-    if (!container) throw new Error("No pude abrir el panel de comentarios");
+    // Escribir respuesta
+    await page.keyboard.type(reply_text, { delay: 30 });
+    await page.keyboard.press("Enter");
 
-    const ready = await waitRealComments(page, 30000);
-    if (!ready) throw new Error("La lista de comentarios no terminó de cargar");
-
-    let found = null;
-    for (let i = 0; i < 30; i++) {
-      found = await findCommentNode(page, { cid, text: comment_text });
-      if (found) break;
-      await robustScroll(page, container);
-      await page.waitForTimeout(450);
-    }
-
-    if (!found) {
-      const debugHtml = container ? await container.innerHTML() : await page.content();
-      throw new Error("No encontré el comentario ::DEBUG:: " + debugHtml.slice(0, DEBUG_HTML_CHARS));
-    }
-
-    await replyToComment(page, found, reply_text);
-
-    const reply_url = cid ? `${video_url}?cid=${cid}` : video_url;
-    clearTimeout(killer);
     await browser.close();
-    return res.json({ ok: true, row_number, reply_text, reply_url });
-  } catch (e) {
-    clearTimeout(killer);
-    if (browser) await browser.close();
-    return res.status(200).json({ ok: false, error: e.message, row_number });
+    return res.json({ ok: true, msg: "Respuesta enviada" });
+
+  } catch (err) {
+    if (browser) await browser.close().catch(() => {});
+    return res.json({ ok: false, error: err.message });
   }
 });
 
 app.listen(PORT, HOST, () => {
-  console.log(`Servidor activo en http://${HOST}:${PORT}`);
+  console.log(`Servidor operativo en http://${HOST}:${PORT}`);
 });
