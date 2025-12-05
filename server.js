@@ -116,7 +116,7 @@ app.post("/run", async (req, res) => {
     target_raw: comment_text,
     target_normalized: normalizeText(comment_text),
     checked: 0,
-    samples: [], // algunos textos de comentarios vistos
+    samples: [],
   };
 
   try {
@@ -139,14 +139,16 @@ app.post("/run", async (req, res) => {
       .catch(() => {});
     await page.waitForTimeout(2000);
 
-    // Validar que realmente hay comentarios visibles
-    let commentLocator = page.locator('[data-e2e*="comment"]');
+    // Usar sólo los comentarios de nivel 1
+    let commentLocator = page.locator('[data-e2e="comment-level-1"]');
     let initialCount = await commentLocator.count();
 
     debugInfo.initial_count = initialCount;
 
     if (initialCount === 0) {
-      throw new Error("comments_panel_not_opened_or_no_comments");
+      const error = new Error("comments_panel_not_opened_or_no_comments");
+      error.debugInfo = debugInfo;
+      throw error;
     }
 
     const targetNormalized = debugInfo.target_normalized;
@@ -156,7 +158,7 @@ app.post("/run", async (req, res) => {
 
     // Búsqueda aproximada con normalización y scroll
     while (!foundComment && scrolls < maxScrolls) {
-      commentLocator = page.locator('[data-e2e*="comment"]');
+      commentLocator = page.locator('[data-e2e="comment-level-1"]');
       const count = await commentLocator.count();
 
       for (let i = 0; i < count; i++) {
@@ -174,7 +176,7 @@ app.post("/run", async (req, res) => {
         // Guardamos algunas muestras para inspeccionar (máx. 10)
         if (debugInfo.samples.length < 10) {
           debugInfo.samples.push({
-            raw: rawText.slice(0, 120),
+            raw: rawText.slice(0, 160),
             normalized,
           });
         }
@@ -195,7 +197,6 @@ app.post("/run", async (req, res) => {
       try {
         await commentLocator.last().scrollIntoViewIfNeeded();
       } catch {
-        // si falla el scroll, salimos del loop para evitar timeout eterno
         break;
       }
       await page.waitForTimeout(800);
@@ -225,14 +226,13 @@ app.post("/run", async (req, res) => {
     return res.json({
       ok: true,
       msg: "Respuesta enviada",
-      debug: debugInfo, // opcional, para ver qué pasó aun cuando funciona
+      debug: debugInfo,
     });
   } catch (err) {
     if (browser) {
       await browser.close().catch(() => {});
     }
 
-    // si el error trae debugInfo la usamos, si no mandamos la que tenemos
     const payload = {
       ok: false,
       error: err.message || "unknown_error",
