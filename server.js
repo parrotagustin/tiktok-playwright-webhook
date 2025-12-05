@@ -24,19 +24,7 @@ function storagePathForAccount(account) {
   return existsSync(specific) ? specific : DEFAULT_STORAGE;
 }
 
-// Normalización de texto
-function normalizeText(str) {
-  if (!str) return "";
-  return str
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[¿?¡!.,:;"]/g, "")
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-// Lanzar navegador
+// Lanzar navegador con perfil "humano"
 async function launchBrowser(storagePath) {
   const browser = await chromium.launch({
     headless: true,
@@ -64,12 +52,12 @@ async function launchBrowser(storagePath) {
 app.get("/", (_, res) => {
   res.json({
     ok: true,
-    message: "Servidor funcionando",
+    message: "Servidor de diagnóstico funcionando",
     time: new Date().toISOString(),
   });
 });
 
-// Check login
+// Verifica que las cookies funcionan y que entra a TikTok
 app.get("/check-login", async (req, res) => {
   const storagePath = storagePathForAccount(req.query.account);
   if (!existsSync(storagePath)) {
@@ -83,22 +71,29 @@ app.get("/check-login", async (req, res) => {
       timeout: 20000,
     });
     await page.waitForTimeout(2000);
+
+    const currentUrl = page.url();
     await browser.close();
 
-    return res.json({ ok: true, session: "valid", storagePath });
+    return res.json({
+      ok: true,
+      session: "valid",
+      storagePath,
+      currentUrl,
+    });
   } catch (err) {
     return res.json({ ok: false, error: err.message });
   }
 });
 
-// Run: responder comentario
-app.post("/run", async (req, res) => {
-  const { video_url, reply_text, comment_text, account } = req.body;
+// Endpoint de diagnóstico paso a paso
+app.post("/debug-run", async (req, res) => {
+  const { video_url, account } = req.body;
 
-  if (!video_url || !reply_text || !comment_text) {
+  if (!video_url) {
     return res
       .status(400)
-      .json({ ok: false, error: "Faltan campos obligatorios" });
+      .json({ ok: false, error: "Falta el campo video_url" });
   }
 
   const storagePath = storagePathForAccount(account);
@@ -111,11 +106,29 @@ app.post("/run", async (req, res) => {
   }
 
   let browser;
-  const debugInfo = {
-    target_raw: comment_text,
-    target_normalized: normalizeText(comment_text),
-    checked: 0,
-    samples: [],
+  const steps = {
+    open_video: {
+      ok: false,
+      url: null,
+      error: null,
+    },
+    click_comment_button: {
+      ok: false,
+      tried: false,
+      error: null,
+    },
+    load_comments: {
+      ok: false,
+      scrolls: 0,
+      selectors: {},
+      error: null,
+    },
+  };
+
+  const COMMENT_SELECTORS = {
+    comment_level_1: '[data-e2e="comment-level-1"]',
+    comment_exact: '[data-e2e="comment"]',
+    comment_contains: '[data-e2e*="comment"]',
   };
 
   try {
@@ -124,138 +137,112 @@ app.post("/run", async (req, res) => {
     const page = ctx.page;
 
     // 1) Ir al vídeo
-    await page.goto(video_url, {
-      waitUntil: "domcontentloaded",
-      timeout: 30000,
-    });
-    await page.waitForTimeout(2000);
-
-    // 2) Esperar el botón de comentarios y hacer click sí o sí
     try {
+      await page.goto(video_url, {
+        waitUntil: "domcontentloaded",
+        timeout: 30000,
+      });
+      await page.waitForTimeout(2000);
+      steps.open_video.ok = true;
+      steps.open_video.url = page.url();
+    } catch (e) {
+      steps.open_video.error = e.message;
+      throw new Error("open_video_failed");
+    }
+
+    // 2) Buscar y clicar el botón de comentarios
+    try {
+      steps.click_comment_button.tried = true;
       await page.waitForSelector('[data-e2e="comment-icon"]', {
         timeout: 10000,
         state: "attached",
       });
       const commentButton = page.locator('[data-e2e="comment-icon"]').first();
       await commentButton.click({ timeout: 8000 });
-      debugInfo.comment_icon_clicked = true;
+      await page.waitForTimeout(2000);
+      steps.click_comment_button.ok = true;
     } catch (e) {
-      debugInfo.comment_icon_click_error = e.message;
+      steps.click_comment_button.error = e.message;
+      // seguimos igual para ver qué selectores hay aunque no se haya podido clicar
     }
 
-    await page.waitForTimeout(2000);
+    // 3) Scroll progresivo y medición de posibles selectores de comentario
+    try {
+      let scrolls = 0;
+      const maxScrolls = 10;
 
-    // 3) Scroll progresivo para forzar la carga de los comentarios
-    let loadScrolls = 0;
-    let initialCount = 0;
-    while (loadScrolls < 10) {
-      const locator = page.locator('[data-e2e="comment-level-1"]');
-      initialCount = await locator.count();
-      if (initialCount > 0) break;
+      for (const key of Object.keys(COMMENT_SELECTORS)) {
+        steps.load_comments.selectors[key] = {
+          selector: COMMENT_SELECTORS[key],
+          counts: [],
+          samples: [],
+        };
+      }
 
-      await page.mouse.wheel(0, 800);
-      await page.waitForTimeout(800);
-      loadScrolls++;
-    }
+      while (scrolls < maxScrolls) {
+        for (const [key, selector] of Object.entries(COMMENT_SELECTORS)) {
+          const locator = page.locator(selector);
+          const count = await locator.count();
+          steps.load_comments.selectors[key].counts.push(count);
 
-    debugInfo.load_scrolls = loadScrolls;
-    debugInfo.initial_count = initialCount;
-
-    if (initialCount === 0) {
-      const error = new Error("comments_panel_not_opened_or_no_comments");
-      error.debugInfo = debugInfo;
-      throw error;
-    }
-
-    // 4) Buscar el comentario normalizado + scroll sobre la lista
-    const targetNormalized = debugInfo.target_normalized;
-    let foundComment = null;
-    const maxScrolls = 20;
-    let scrolls = 0;
-
-    while (!foundComment && scrolls < maxScrolls) {
-      const commentLocator = page.locator('[data-e2e="comment-level-1"]');
-      const count = await commentLocator.count();
-
-      for (let i = 0; i < count; i++) {
-        const handle = commentLocator.nth(i);
-        let rawText = "";
-        try {
-          rawText = await handle.innerText();
-        } catch {
-          continue;
+          if (
+            count > 0 &&
+            steps.load_comments.selectors[key].samples.length === 0
+          ) {
+            const maxSamples = Math.min(count, 3);
+            for (let i = 0; i < maxSamples; i++) {
+              let rawText = "";
+              try {
+                rawText = await locator.nth(i).innerText();
+              } catch {
+                continue;
+              }
+              steps.load_comments.selectors[key].samples.push(
+                rawText.slice(0, 160)
+              );
+            }
+          }
         }
 
-        const normalized = normalizeText(rawText);
-        debugInfo.checked += 1;
+        const anySelectorHasComments = Object.values(
+          steps.load_comments.selectors
+        ).some((info) => info.counts[info.counts.length - 1] > 0);
 
-        if (debugInfo.samples.length < 10) {
-          debugInfo.samples.push({
-            raw: rawText.slice(0, 160),
-            normalized,
-          });
-        }
-
-        if (normalized.includes(targetNormalized)) {
-          foundComment = handle;
-          debugInfo.matched = {
-            raw: rawText.slice(0, 200),
-            normalized,
-          };
+        if (anySelectorHasComments && scrolls >= 2) {
           break;
         }
+
+        await page.mouse.wheel(0, 800);
+        await page.waitForTimeout(800);
+        scrolls++;
       }
 
-      if (foundComment) break;
-
-      try {
-        await page
-          .locator('[data-e2e="comment-level-1"]')
-          .last()
-          .scrollIntoViewIfNeeded();
-      } catch {
-        break;
-      }
-      await page.waitForTimeout(800);
-      scrolls++;
+      steps.load_comments.scrolls = scrolls;
+      steps.load_comments.ok = true;
+    } catch (e) {
+      steps.load_comments.error = e.message;
+      throw new Error("load_comments_failed");
     }
-
-    debugInfo.scrolls = scrolls;
-
-    if (!foundComment) {
-      const error = new Error("comment_not_found_normalized");
-      error.debugInfo = debugInfo;
-      throw error;
-    }
-
-    // 5) Click en el comentario y responder
-    await foundComment.scrollIntoViewIfNeeded();
-    await foundComment.click({ delay: 60 });
-    await page.waitForTimeout(800);
-
-    await page.keyboard.type(reply_text, { delay: 30 });
-    await page.keyboard.press("Enter");
-
-    await page.waitForTimeout(1500);
 
     await browser.close();
+
+    const globalOk =
+      steps.open_video.ok && steps.click_comment_button.ok && steps.load_comments.ok;
+
     return res.json({
-      ok: true,
-      msg: "Respuesta enviada",
-      debug: debugInfo,
+      ok: globalOk,
+      steps,
     });
   } catch (err) {
     if (browser) {
       await browser.close().catch(() => {});
     }
 
-    const payload = {
+    return res.json({
       ok: false,
       error: err.message || "unknown_error",
-      debug: err.debugInfo || debugInfo,
-    };
-
-    return res.json(payload);
+      steps,
+    });
   }
 });
 
