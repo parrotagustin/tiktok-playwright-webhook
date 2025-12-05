@@ -89,8 +89,9 @@ app.get("/check-login", async (req, res) => {
 });
 
 // Endpoint de diagnóstico profundo del DOM de comentarios
+// Ahora también busca un texto concreto (search_text) dentro del HTML del body
 app.post("/debug-dom", async (req, res) => {
-  const { video_url, account } = req.body;
+  const { video_url, account, search_text } = req.body;
 
   if (!video_url) {
     return res
@@ -111,6 +112,8 @@ app.post("/debug-dom", async (req, res) => {
   const debug = {
     video_url_requested: video_url,
     video_url_final: null,
+    search_text: search_text || null,
+    text_search: null,
     steps: {
       open_video: { ok: false, error: null },
       click_comment_button: { ok: false, tried: false, error: null },
@@ -150,7 +153,7 @@ app.post("/debug-dom", async (req, res) => {
       debug.steps.click_comment_button.ok = true;
     } catch (e) {
       debug.steps.click_comment_button.error = e.message;
-      // seguimos igual para ver qué DOM hay aunque falle el click
+      // seguimos para ver qué DOM hay aunque falle el click
     }
 
     // 3) Scroll progresivo para intentar cargar todos los comentarios
@@ -172,13 +175,29 @@ app.post("/debug-dom", async (req, res) => {
     }
 
     // 4) Capturar DOM: body completo + algunos selectores candidatos
-    const MAX_HTML = 8000; // recorte para que no sea gigante
+    const MAX_HTML = 8000; // recorte para respuesta
 
     let bodyHtml = "";
     try {
       bodyHtml = await page.innerHTML("body");
     } catch {
       bodyHtml = "<error-reading-body-innerHTML>";
+    }
+
+    // Búsqueda del texto dentro del bodyHtml, si search_text fue enviado
+    if (search_text && typeof search_text === "string") {
+      const rawIndex = bodyHtml.indexOf(search_text);
+      const lowerBody = bodyHtml.toLowerCase();
+      const lowerSearch = search_text.toLowerCase();
+      const lowerIndex = lowerBody.indexOf(lowerSearch);
+
+      debug.text_search = {
+        search_text,
+        found_raw: rawIndex !== -1,
+        index_raw: rawIndex,
+        found_lowercase: lowerIndex !== -1,
+        index_lowercase: lowerIndex,
+      };
     }
 
     const selectorsToInspect = {
