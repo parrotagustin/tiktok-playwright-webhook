@@ -24,19 +24,19 @@ function storagePathForAccount(account) {
   return existsSync(specific) ? specific : DEFAULT_STORAGE;
 }
 
-// Normalización de texto para comparar comentarios (sin acentos, signos, etc.)
+// Normalización de texto
 function normalizeText(str) {
   if (!str) return "";
   return str
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "") // quitar acentos
-    .replace(/[¿?¡!.,:;"]/g, "") // quitar signos de puntuación típicos
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[¿?¡!.,:;"]/g, "")
     .toLowerCase()
-    .replace(/\s+/g, " ") // colapsar espacios múltiples
+    .replace(/\s+/g, " ")
     .trim();
 }
 
-// Anti-detección y perfil realista
+// Lanzar navegador
 async function launchBrowser(storagePath) {
   const browser = await chromium.launch({
     headless: true,
@@ -69,7 +69,7 @@ app.get("/", (_, res) => {
   });
 });
 
-// Verifica que las cookies funcionan
+// Check login
 app.get("/check-login", async (req, res) => {
   const storagePath = storagePathForAccount(req.query.account);
   if (!existsSync(storagePath)) {
@@ -91,7 +91,7 @@ app.get("/check-login", async (req, res) => {
   }
 });
 
-// Responder comentario en TikTok
+// Run: responder comentario
 app.post("/run", async (req, res) => {
   const { video_url, reply_text, comment_text, account } = req.body;
 
@@ -130,25 +130,23 @@ app.post("/run", async (req, res) => {
     });
     await page.waitForTimeout(2000);
 
-    // 2) Intentar abrir el panel de comentarios de forma explícita
+    // 2) Click en el botón de comentarios si existe
     try {
-      // botón principal de comentarios
       const commentButton = page.locator('[data-e2e="comment-icon"]');
       if (await commentButton.first().isVisible()) {
         await commentButton.first().click({ timeout: 8000 });
       }
     } catch (e) {
-      // si falla, lo registramos en debug pero seguimos
       debugInfo.comment_icon_click_error = e.message;
     }
 
-    // pequeña espera después del click
     await page.waitForTimeout(2000);
 
-    // 3) Esperar explícitamente a que aparezca al menos un comentario de nivel 1
+    // 3) Esperar a que haya al menos un comentario nivel 1 (adjunto al DOM)
     try {
       await page.waitForSelector('[data-e2e="comment-level-1"]', {
         timeout: 10000,
+        state: "attached",
       });
     } catch (e) {
       debugInfo.wait_comment_level_1_error = e.message;
@@ -225,7 +223,7 @@ app.post("/run", async (req, res) => {
       throw error;
     }
 
-    // 5) Hacer click en el comentario y responder
+    // 5) Click en el comentario y responder
     await foundComment.scrollIntoViewIfNeeded();
     await foundComment.click({ delay: 60 });
     await page.waitForTimeout(800);
