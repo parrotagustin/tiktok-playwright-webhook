@@ -37,7 +37,7 @@ async function launchBrowser(storagePath) {
   });
 
   const context = await browser.newContext({
-    storageState: storagePath, // acá se usan las cookies guardadas
+    storageState: storagePath, // cookies de sesión TikTok
     locale: "es-ES",
     userAgent:
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -57,7 +57,7 @@ app.get("/", (_, res) => {
   });
 });
 
-// Verifica que las cookies funcionan y que entra a TikTok logueado
+// Verifica que las cookies funcionan y que entra a TikTok
 app.get("/check-login", async (req, res) => {
   const storagePath = storagePathForAccount(req.query.account);
   if (!existsSync(storagePath)) {
@@ -75,7 +75,6 @@ app.get("/check-login", async (req, res) => {
     const currentUrl = page.url();
     await browser.close();
 
-    // si currentUrl contiene "login" o similar, sabremos que no está logueado
     const probablyLoggedIn = !/login/i.test(currentUrl);
 
     return res.json({
@@ -89,8 +88,8 @@ app.get("/check-login", async (req, res) => {
   }
 });
 
-// Diagnóstico específico de comentarios: extraer HTML/texto de cada comentario
-app.post("/debug-comments", async (req, res) => {
+// Endpoint de diagnóstico profundo del DOM de comentarios
+app.post("/debug-dom", async (req, res) => {
   const { video_url, account } = req.body;
 
   if (!video_url) {
@@ -115,10 +114,8 @@ app.post("/debug-comments", async (req, res) => {
     steps: {
       open_video: { ok: false, error: null },
       click_comment_button: { ok: false, tried: false, error: null },
-      load_comments: { ok: false, scrolls: 0, error: null },
-    },
-    selectors_used: {
-      container: '[data-e2e="comment-level-1"]',
+      scroll_comments: { ok: false, scrolls: 0, error: null },
+      capture_dom: { ok: false, error: null },
     },
   };
 
@@ -140,7 +137,7 @@ app.post("/debug-comments", async (req, res) => {
       throw new Error("open_video_failed");
     }
 
-    // 2) Buscar y clicar el botón de comentarios
+    // 2) Buscar y clicar el botón de comentarios (si existe)
     try {
       debug.steps.click_comment_button.tried = true;
       await page.waitForSelector('[data-e2e="comment-icon"]', {
@@ -153,66 +150,92 @@ app.post("/debug-comments", async (req, res) => {
       debug.steps.click_comment_button.ok = true;
     } catch (e) {
       debug.steps.click_comment_button.error = e.message;
-      // seguimos igual para ver qué hay, aunque no se haya podido clicar
+      // seguimos igual para ver qué DOM hay aunque falle el click
     }
 
-    // 3) Scroll progresivo para cargar comentarios
+    // 3) Scroll progresivo para intentar cargar todos los comentarios
     try {
       let scrolls = 0;
       const maxScrolls = 10;
 
       while (scrolls < maxScrolls) {
-        const locator = page.locator('[data-e2e="comment-level-1"]');
-        const count = await locator.count();
-        if (count > 0) break;
-
         await page.mouse.wheel(0, 800);
         await page.waitForTimeout(800);
         scrolls++;
       }
 
-      debug.steps.load_comments.scrolls = scrolls;
-      debug.steps.load_comments.ok = true;
+      debug.steps.scroll_comments.scrolls = scrolls;
+      debug.steps.scroll_comments.ok = true;
     } catch (e) {
-      debug.steps.load_comments.error = e.message;
-      throw new Error("load_comments_failed");
+      debug.steps.scroll_comments.error = e.message;
+      throw new Error("scroll_comments_failed");
     }
 
-    // 4) Extraer innerHTML + innerText de los comentarios detectados
-    const containerLocator = page.locator('[data-e2e="comment-level-1"]');
-    const total = await containerLocator.count();
-    const maxToReturn = Math.min(total, 10); // por si hay muchos
+    // 4) Capturar DOM: body completo + algunos selectores candidatos
+    const MAX_HTML = 8000; // recorte para que no sea gigante
 
-    const comments = [];
-    for (let i = 0; i < maxToReturn; i++) {
-      const handle = containerLocator.nth(i);
-      let innerHTML = "";
-      let innerText = "";
-      try {
-        innerHTML = await handle.innerHTML();
-      } catch {
-        innerHTML = "<error-reading-innerHTML>";
-      }
-      try {
-        innerText = await handle.innerText();
-      } catch {
-        innerText = "<error-reading-innerText>";
-      }
-
-      comments.push({
-        index: i,
-        innerHTML: innerHTML.slice(0, 2000), // truncamos para no romper la respuesta
-        innerText,
-      });
+    let bodyHtml = "";
+    try {
+      bodyHtml = await page.innerHTML("body");
+    } catch {
+      bodyHtml = "<error-reading-body-innerHTML>";
     }
+
+    const selectorsToInspect = {
+      comment_level_1: '[data-e2e="comment-level-1"]',
+      comment_any_e2e: '[data-e2e*="comment"]',
+      p_tags: "p",
+      divs: "div",
+    };
+
+    const selectorSnapshots = {};
+
+    for (const [key, selector] of Object.entries(selectorsToInspect)) {
+      const locator = page.locator(selector);
+      const count = await locator.count();
+      const maxNodes = Math.min(count, 5);
+      const nodes = [];
+
+      for (let i = 0; i < maxNodes; i++) {
+        const handle = locator.nth(i);
+        let innerHTML = "";
+        let innerText = "";
+        try {
+          innerHTML = await handle.innerHTML();
+        } catch {
+          innerHTML = "<error-reading-innerHTML>";
+        }
+        try {
+          innerText = await handle.innerText();
+        } catch {
+          innerText = "<error-reading-innerText>";
+        }
+
+        nodes.push({
+          index: i,
+          innerHTML: innerHTML.slice(0, 1000),
+          innerText,
+        });
+      }
+
+      selectorSnapshots[key] = {
+        selector,
+        count,
+        nodes,
+      };
+    }
+
+    debug.steps.capture_dom.ok = true;
 
     await browser.close();
 
     return res.json({
       ok: true,
       debug,
-      total_containers: total,
-      comments,
+      dom: {
+        bodySnippet: bodyHtml.slice(0, MAX_HTML),
+        selectors: selectorSnapshots,
+      },
     });
   } catch (err) {
     if (browser) {
