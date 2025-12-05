@@ -111,6 +111,14 @@ app.post("/run", async (req, res) => {
   }
 
   let browser;
+  // info de depuración para entender qué ve Playwright
+  const debugInfo = {
+    target_raw: comment_text,
+    target_normalized: normalizeText(comment_text),
+    checked: 0,
+    samples: [], // algunos textos de comentarios vistos
+  };
+
   try {
     const ctx = await launchBrowser(storagePath);
     browser = ctx.browser;
@@ -135,11 +143,13 @@ app.post("/run", async (req, res) => {
     let commentLocator = page.locator('[data-e2e*="comment"]');
     let initialCount = await commentLocator.count();
 
+    debugInfo.initial_count = initialCount;
+
     if (initialCount === 0) {
       throw new Error("comments_panel_not_opened_or_no_comments");
     }
 
-    const targetNormalized = normalizeText(comment_text);
+    const targetNormalized = debugInfo.target_normalized;
     let foundComment = null;
     const maxScrolls = 20;
     let scrolls = 0;
@@ -159,8 +169,22 @@ app.post("/run", async (req, res) => {
         }
 
         const normalized = normalizeText(rawText);
+        debugInfo.checked += 1;
+
+        // Guardamos algunas muestras para inspeccionar (máx. 10)
+        if (debugInfo.samples.length < 10) {
+          debugInfo.samples.push({
+            raw: rawText.slice(0, 120),
+            normalized,
+          });
+        }
+
         if (normalized.includes(targetNormalized)) {
           foundComment = handle;
+          debugInfo.matched = {
+            raw: rawText.slice(0, 200),
+            normalized,
+          };
           break;
         }
       }
@@ -178,8 +202,12 @@ app.post("/run", async (req, res) => {
       scrolls++;
     }
 
+    debugInfo.scrolls = scrolls;
+
     if (!foundComment) {
-      throw new Error("comment_not_found_normalized");
+      const error = new Error("comment_not_found_normalized");
+      error.debugInfo = debugInfo;
+      throw error;
     }
 
     // Asegurarse de que el comentario está en vista y hacer click para responder
@@ -197,12 +225,21 @@ app.post("/run", async (req, res) => {
     return res.json({
       ok: true,
       msg: "Respuesta enviada",
+      debug: debugInfo, // opcional, para ver qué pasó aun cuando funciona
     });
   } catch (err) {
     if (browser) {
       await browser.close().catch(() => {});
     }
-    return res.json({ ok: false, error: err.message });
+
+    // si el error trae debugInfo la usamos, si no mandamos la que tenemos
+    const payload = {
+      ok: false,
+      error: err.message || "unknown_error",
+      debug: err.debugInfo || debugInfo,
+    };
+
+    return res.json(payload);
   }
 });
 
