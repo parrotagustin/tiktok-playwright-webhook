@@ -14,13 +14,26 @@ app.use(express.json({ limit: "2mb" }));
 const PORT = process.env.PORT || 8080;
 const HOST = "0.0.0.0";
 const STORAGE_DIR = process.env.STORAGE_DIR || path.join(__dirname, "local");
-const DEFAULT_STORAGE = process.env.STORAGE_STATE_PATH || path.join(STORAGE_DIR, "storageState.json");
+const DEFAULT_STORAGE =
+  process.env.STORAGE_STATE_PATH || path.join(STORAGE_DIR, "storageState.json");
 
 // Selección dinámica de archivo de cookies
 function storagePathForAccount(account) {
   if (!account) return DEFAULT_STORAGE;
   const specific = path.join(STORAGE_DIR, "accounts", `${account}.json`);
   return existsSync(specific) ? specific : DEFAULT_STORAGE;
+}
+
+// Normalización de texto para comparar comentarios (sin acentos, signos, etc.)
+function normalizeText(str) {
+  if (!str) return "";
+  return str
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // quitar acentos
+    .replace(/[¿?¡!.,:;"]/g, "") // quitar signos de puntuación típicos
+    .toLowerCase()
+    .replace(/\s+/g, " ") // colapsar espacios múltiples
+    .trim();
 }
 
 // Anti-detección y perfil realista
@@ -31,15 +44,16 @@ async function launchBrowser(storagePath) {
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-blink-features=AutomationControlled",
-      "--disable-infobars"
-    ]
+      "--disable-infobars",
+    ],
   });
 
   const context = await browser.newContext({
     storageState: storagePath,
     locale: "es-ES",
-    userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    viewport: { width: 1280, height: 1000 }
+    userAgent:
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    viewport: { width: 1280, height: 1000 },
   });
 
   const page = await context.newPage();
@@ -48,7 +62,11 @@ async function launchBrowser(storagePath) {
 
 // Home
 app.get("/", (_, res) => {
-  res.json({ ok: true, message: "Servidor funcionando", time: new Date().toISOString() });
+  res.json({
+    ok: true,
+    message: "Servidor funcionando",
+    time: new Date().toISOString(),
+  });
 });
 
 // Verifica que las cookies funcionan
@@ -60,7 +78,10 @@ app.get("/check-login", async (req, res) => {
 
   try {
     const { browser, page } = await launchBrowser(storagePath);
-    await page.goto("https://www.tiktok.com/", { waitUntil: "domcontentloaded", timeout: 20000 });
+    await page.goto("https://www.tiktok.com/", {
+      waitUntil: "domcontentloaded",
+      timeout: 20000,
+    });
     await page.waitForTimeout(2000);
     await browser.close();
 
@@ -75,12 +96,18 @@ app.post("/run", async (req, res) => {
   const { video_url, reply_text, comment_text, account } = req.body;
 
   if (!video_url || !reply_text || !comment_text) {
-    return res.status(400).json({ ok: false, error: "Faltan campos obligatorios" });
+    return res
+      .status(400)
+      .json({ ok: false, error: "Faltan campos obligatorios" });
   }
 
   const storagePath = storagePathForAccount(account);
   if (!existsSync(storagePath)) {
-    return res.json({ ok: false, error: "storageState no encontrado", storagePath });
+    return res.json({
+      ok: false,
+      error: "storageState no encontrado",
+      storagePath,
+    });
   }
 
   let browser;
@@ -89,28 +116,92 @@ app.post("/run", async (req, res) => {
     browser = ctx.browser;
     const page = ctx.page;
 
-    await page.goto(video_url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    // Ir al video
+    await page.goto(video_url, {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
     await page.waitForTimeout(2000);
 
-    // Abrir comentarios
-    await page.click('[data-e2e="comment-icon"], [aria-label*="coment"]', { timeout: 8000 }).catch(() => {});
+    // Abrir panel de comentarios
+    await page
+      .click('[data-e2e="comment-icon"], [aria-label*="oment"]', {
+        timeout: 8000,
+      })
+      .catch(() => {});
     await page.waitForTimeout(2000);
 
-    // Buscar el comentario por texto aproximado
-    const commentHandle = await page.locator(`text=${comment_text}`).first();
-    await commentHandle.scrollIntoViewIfNeeded();
-    await commentHandle.click({ delay: 60 });
+    // Validar que realmente hay comentarios visibles
+    let commentLocator = page.locator('[data-e2e*="comment"]');
+    let initialCount = await commentLocator.count();
+
+    if (initialCount === 0) {
+      throw new Error("comments_panel_not_opened_or_no_comments");
+    }
+
+    const targetNormalized = normalizeText(comment_text);
+    let foundComment = null;
+    const maxScrolls = 20;
+    let scrolls = 0;
+
+    // Búsqueda aproximada con normalización y scroll
+    while (!foundComment && scrolls < maxScrolls) {
+      commentLocator = page.locator('[data-e2e*="comment"]');
+      const count = await commentLocator.count();
+
+      for (let i = 0; i < count; i++) {
+        const handle = commentLocator.nth(i);
+        let rawText = "";
+        try {
+          rawText = await handle.innerText();
+        } catch {
+          continue;
+        }
+
+        const normalized = normalizeText(rawText);
+        if (normalized.includes(targetNormalized)) {
+          foundComment = handle;
+          break;
+        }
+      }
+
+      if (foundComment) break;
+
+      // Scroll suave hacia el último comentario y esperar que carguen más
+      try {
+        await commentLocator.last().scrollIntoViewIfNeeded();
+      } catch {
+        // si falla el scroll, salimos del loop para evitar timeout eterno
+        break;
+      }
+      await page.waitForTimeout(800);
+      scrolls++;
+    }
+
+    if (!foundComment) {
+      throw new Error("comment_not_found_normalized");
+    }
+
+    // Asegurarse de que el comentario está en vista y hacer click para responder
+    await foundComment.scrollIntoViewIfNeeded();
+    await foundComment.click({ delay: 60 });
     await page.waitForTimeout(800);
 
     // Escribir respuesta
     await page.keyboard.type(reply_text, { delay: 30 });
     await page.keyboard.press("Enter");
 
-    await browser.close();
-    return res.json({ ok: true, msg: "Respuesta enviada" });
+    await page.waitForTimeout(1500);
 
+    await browser.close();
+    return res.json({
+      ok: true,
+      msg: "Respuesta enviada",
+    });
   } catch (err) {
-    if (browser) await browser.close().catch(() => {});
+    if (browser) {
+      await browser.close().catch(() => {});
+    }
     return res.json({ ok: false, error: err.message });
   }
 });
