@@ -111,7 +111,6 @@ app.post("/run", async (req, res) => {
   }
 
   let browser;
-  // info de depuración para entender qué ve Playwright
   const debugInfo = {
     target_raw: comment_text,
     target_normalized: normalizeText(comment_text),
@@ -124,25 +123,42 @@ app.post("/run", async (req, res) => {
     browser = ctx.browser;
     const page = ctx.page;
 
-    // Ir al video
+    // 1) Ir al vídeo
     await page.goto(video_url, {
       waitUntil: "domcontentloaded",
       timeout: 30000,
     });
     await page.waitForTimeout(2000);
 
-    // Abrir panel de comentarios
-    await page
-      .click('[data-e2e="comment-icon"], [aria-label*="oment"]', {
-        timeout: 8000,
-      })
-      .catch(() => {});
+    // 2) Intentar abrir el panel de comentarios de forma explícita
+    try {
+      // botón principal de comentarios
+      const commentButton = page.locator('[data-e2e="comment-icon"]');
+      if (await commentButton.first().isVisible()) {
+        await commentButton.first().click({ timeout: 8000 });
+      }
+    } catch (e) {
+      // si falla, lo registramos en debug pero seguimos
+      debugInfo.comment_icon_click_error = e.message;
+    }
+
+    // pequeña espera después del click
     await page.waitForTimeout(2000);
 
-    // Usar sólo los comentarios de nivel 1
+    // 3) Esperar explícitamente a que aparezca al menos un comentario de nivel 1
+    try {
+      await page.waitForSelector('[data-e2e="comment-level-1"]', {
+        timeout: 10000,
+      });
+    } catch (e) {
+      debugInfo.wait_comment_level_1_error = e.message;
+      const error = new Error("comments_panel_not_opened_or_no_comments");
+      error.debugInfo = debugInfo;
+      throw error;
+    }
+
     let commentLocator = page.locator('[data-e2e="comment-level-1"]');
     let initialCount = await commentLocator.count();
-
     debugInfo.initial_count = initialCount;
 
     if (initialCount === 0) {
@@ -151,12 +167,12 @@ app.post("/run", async (req, res) => {
       throw error;
     }
 
+    // 4) Buscar el comentario normalizado + scroll
     const targetNormalized = debugInfo.target_normalized;
     let foundComment = null;
     const maxScrolls = 20;
     let scrolls = 0;
 
-    // Búsqueda aproximada con normalización y scroll
     while (!foundComment && scrolls < maxScrolls) {
       commentLocator = page.locator('[data-e2e="comment-level-1"]');
       const count = await commentLocator.count();
@@ -173,7 +189,6 @@ app.post("/run", async (req, res) => {
         const normalized = normalizeText(rawText);
         debugInfo.checked += 1;
 
-        // Guardamos algunas muestras para inspeccionar (máx. 10)
         if (debugInfo.samples.length < 10) {
           debugInfo.samples.push({
             raw: rawText.slice(0, 160),
@@ -193,7 +208,6 @@ app.post("/run", async (req, res) => {
 
       if (foundComment) break;
 
-      // Scroll suave hacia el último comentario y esperar que carguen más
       try {
         await commentLocator.last().scrollIntoViewIfNeeded();
       } catch {
@@ -211,12 +225,11 @@ app.post("/run", async (req, res) => {
       throw error;
     }
 
-    // Asegurarse de que el comentario está en vista y hacer click para responder
+    // 5) Hacer click en el comentario y responder
     await foundComment.scrollIntoViewIfNeeded();
     await foundComment.click({ delay: 60 });
     await page.waitForTimeout(800);
 
-    // Escribir respuesta
     await page.keyboard.type(reply_text, { delay: 30 });
     await page.keyboard.press("Enter");
 
