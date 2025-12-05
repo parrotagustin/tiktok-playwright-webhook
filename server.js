@@ -135,6 +135,9 @@ app.post("/run", async (req, res) => {
       const commentButton = page.locator('[data-e2e="comment-icon"]');
       if (await commentButton.first().isVisible()) {
         await commentButton.first().click({ timeout: 8000 });
+        debugInfo.comment_icon_clicked = true;
+      } else {
+        debugInfo.comment_icon_visible = false;
       }
     } catch (e) {
       debugInfo.comment_icon_click_error = e.message;
@@ -142,21 +145,21 @@ app.post("/run", async (req, res) => {
 
     await page.waitForTimeout(2000);
 
-    // 3) Esperar a que haya al menos un comentario nivel 1 (adjunto al DOM)
-    try {
-      await page.waitForSelector('[data-e2e="comment-level-1"]', {
-        timeout: 10000,
-        state: "attached",
-      });
-    } catch (e) {
-      debugInfo.wait_comment_level_1_error = e.message;
-      const error = new Error("comments_panel_not_opened_or_no_comments");
-      error.debugInfo = debugInfo;
-      throw error;
+    // 3) Scroll progresivo para forzar la carga de los comentarios
+    let loadScrolls = 0;
+    let initialCount = 0;
+    while (loadScrolls < 10) {
+      const locator = page.locator('[data-e2e="comment-level-1"]');
+      initialCount = await locator.count();
+      if (initialCount > 0) break;
+
+      // scroll suave hacia abajo
+      await page.mouse.wheel(0, 800);
+      await page.waitForTimeout(800);
+      loadScrolls++;
     }
 
-    let commentLocator = page.locator('[data-e2e="comment-level-1"]');
-    let initialCount = await commentLocator.count();
+    debugInfo.load_scrolls = loadScrolls;
     debugInfo.initial_count = initialCount;
 
     if (initialCount === 0) {
@@ -165,14 +168,14 @@ app.post("/run", async (req, res) => {
       throw error;
     }
 
-    // 4) Buscar el comentario normalizado + scroll
+    // 4) Buscar el comentario normalizado + scroll sobre la lista
     const targetNormalized = debugInfo.target_normalized;
     let foundComment = null;
     const maxScrolls = 20;
     let scrolls = 0;
 
     while (!foundComment && scrolls < maxScrolls) {
-      commentLocator = page.locator('[data-e2e="comment-level-1"]');
+      const commentLocator = page.locator('[data-e2e="comment-level-1"]');
       const count = await commentLocator.count();
 
       for (let i = 0; i < count; i++) {
@@ -207,7 +210,7 @@ app.post("/run", async (req, res) => {
       if (foundComment) break;
 
       try {
-        await commentLocator.last().scrollIntoViewIfNeeded();
+        await page.locator('[data-e2e="comment-level-1"]').last().scrollIntoViewIfNeeded();
       } catch {
         break;
       }
