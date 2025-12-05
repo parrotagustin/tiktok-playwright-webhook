@@ -37,7 +37,7 @@ async function launchBrowser(storagePath) {
   });
 
   const context = await browser.newContext({
-    storageState: storagePath,
+    storageState: storagePath, // acá se usan las cookies guardadas
     locale: "es-ES",
     userAgent:
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -52,12 +52,12 @@ async function launchBrowser(storagePath) {
 app.get("/", (_, res) => {
   res.json({
     ok: true,
-    message: "Servidor de diagnóstico funcionando",
+    message: "Servidor de diagnóstico TikTok activo",
     time: new Date().toISOString(),
   });
 });
 
-// Verifica que las cookies funcionan y que entra a TikTok
+// Verifica que las cookies funcionan y que entra a TikTok logueado
 app.get("/check-login", async (req, res) => {
   const storagePath = storagePathForAccount(req.query.account);
   if (!existsSync(storagePath)) {
@@ -75,9 +75,12 @@ app.get("/check-login", async (req, res) => {
     const currentUrl = page.url();
     await browser.close();
 
+    // si currentUrl contiene "login" o similar, sabremos que no está logueado
+    const probablyLoggedIn = !/login/i.test(currentUrl);
+
     return res.json({
       ok: true,
-      session: "valid",
+      session: probablyLoggedIn ? "likely_logged_in" : "maybe_logged_out",
       storagePath,
       currentUrl,
     });
@@ -86,8 +89,8 @@ app.get("/check-login", async (req, res) => {
   }
 });
 
-// Endpoint de diagnóstico paso a paso
-app.post("/debug-run", async (req, res) => {
+// Diagnóstico específico de comentarios: extraer HTML/texto de cada comentario
+app.post("/debug-comments", async (req, res) => {
   const { video_url, account } = req.body;
 
   if (!video_url) {
@@ -106,35 +109,22 @@ app.post("/debug-run", async (req, res) => {
   }
 
   let browser;
-  const steps = {
-    open_video: {
-      ok: false,
-      url: null,
-      error: null,
+  const debug = {
+    video_url_requested: video_url,
+    video_url_final: null,
+    steps: {
+      open_video: { ok: false, error: null },
+      click_comment_button: { ok: false, tried: false, error: null },
+      load_comments: { ok: false, scrolls: 0, error: null },
     },
-    click_comment_button: {
-      ok: false,
-      tried: false,
-      error: null,
+    selectors_used: {
+      container: '[data-e2e="comment-level-1"]',
     },
-    load_comments: {
-      ok: false,
-      scrolls: 0,
-      selectors: {},
-      error: null,
-    },
-  };
-
-  const COMMENT_SELECTORS = {
-    comment_level_1: '[data-e2e="comment-level-1"]',
-    comment_exact: '[data-e2e="comment"]',
-    comment_contains: '[data-e2e*="comment"]',
   };
 
   try {
-    const ctx = await launchBrowser(storagePath);
-    browser = ctx.browser;
-    const page = ctx.page;
+    const { browser: b, page } = await launchBrowser(storagePath);
+    browser = b;
 
     // 1) Ir al vídeo
     try {
@@ -143,16 +133,16 @@ app.post("/debug-run", async (req, res) => {
         timeout: 30000,
       });
       await page.waitForTimeout(2000);
-      steps.open_video.ok = true;
-      steps.open_video.url = page.url();
+      debug.video_url_final = page.url();
+      debug.steps.open_video.ok = true;
     } catch (e) {
-      steps.open_video.error = e.message;
+      debug.steps.open_video.error = e.message;
       throw new Error("open_video_failed");
     }
 
     // 2) Buscar y clicar el botón de comentarios
     try {
-      steps.click_comment_button.tried = true;
+      debug.steps.click_comment_button.tried = true;
       await page.waitForSelector('[data-e2e="comment-icon"]', {
         timeout: 10000,
         state: "attached",
@@ -160,78 +150,69 @@ app.post("/debug-run", async (req, res) => {
       const commentButton = page.locator('[data-e2e="comment-icon"]').first();
       await commentButton.click({ timeout: 8000 });
       await page.waitForTimeout(2000);
-      steps.click_comment_button.ok = true;
+      debug.steps.click_comment_button.ok = true;
     } catch (e) {
-      steps.click_comment_button.error = e.message;
-      // seguimos igual para ver qué selectores hay aunque no se haya podido clicar
+      debug.steps.click_comment_button.error = e.message;
+      // seguimos igual para ver qué hay, aunque no se haya podido clicar
     }
 
-    // 3) Scroll progresivo y medición de posibles selectores de comentario
+    // 3) Scroll progresivo para cargar comentarios
     try {
       let scrolls = 0;
       const maxScrolls = 10;
 
-      for (const key of Object.keys(COMMENT_SELECTORS)) {
-        steps.load_comments.selectors[key] = {
-          selector: COMMENT_SELECTORS[key],
-          counts: [],
-          samples: [],
-        };
-      }
-
       while (scrolls < maxScrolls) {
-        for (const [key, selector] of Object.entries(COMMENT_SELECTORS)) {
-          const locator = page.locator(selector);
-          const count = await locator.count();
-          steps.load_comments.selectors[key].counts.push(count);
-
-          if (
-            count > 0 &&
-            steps.load_comments.selectors[key].samples.length === 0
-          ) {
-            const maxSamples = Math.min(count, 3);
-            for (let i = 0; i < maxSamples; i++) {
-              let rawText = "";
-              try {
-                rawText = await locator.nth(i).innerText();
-              } catch {
-                continue;
-              }
-              steps.load_comments.selectors[key].samples.push(
-                rawText.slice(0, 160)
-              );
-            }
-          }
-        }
-
-        const anySelectorHasComments = Object.values(
-          steps.load_comments.selectors
-        ).some((info) => info.counts[info.counts.length - 1] > 0);
-
-        if (anySelectorHasComments && scrolls >= 2) {
-          break;
-        }
+        const locator = page.locator('[data-e2e="comment-level-1"]');
+        const count = await locator.count();
+        if (count > 0) break;
 
         await page.mouse.wheel(0, 800);
         await page.waitForTimeout(800);
         scrolls++;
       }
 
-      steps.load_comments.scrolls = scrolls;
-      steps.load_comments.ok = true;
+      debug.steps.load_comments.scrolls = scrolls;
+      debug.steps.load_comments.ok = true;
     } catch (e) {
-      steps.load_comments.error = e.message;
+      debug.steps.load_comments.error = e.message;
       throw new Error("load_comments_failed");
+    }
+
+    // 4) Extraer innerHTML + innerText de los comentarios detectados
+    const containerLocator = page.locator('[data-e2e="comment-level-1"]');
+    const total = await containerLocator.count();
+    const maxToReturn = Math.min(total, 10); // por si hay muchos
+
+    const comments = [];
+    for (let i = 0; i < maxToReturn; i++) {
+      const handle = containerLocator.nth(i);
+      let innerHTML = "";
+      let innerText = "";
+      try {
+        innerHTML = await handle.innerHTML();
+      } catch {
+        innerHTML = "<error-reading-innerHTML>";
+      }
+      try {
+        innerText = await handle.innerText();
+      } catch {
+        innerText = "<error-reading-innerText>";
+      }
+
+      comments.push({
+        index: i,
+        innerHTML: innerHTML.slice(0, 2000), // truncamos para no romper la respuesta
+        innerText,
+      });
     }
 
     await browser.close();
 
-    const globalOk =
-      steps.open_video.ok && steps.click_comment_button.ok && steps.load_comments.ok;
-
     return res.json({
-      ok: globalOk,
-      steps,
+      ok: true,
+      debug,
+      total_containers: total,
+      comments,
     });
   } catch (err) {
     if (browser) {
@@ -241,11 +222,11 @@ app.post("/debug-run", async (req, res) => {
     return res.json({
       ok: false,
       error: err.message || "unknown_error",
-      steps,
+      debug,
     });
   }
 });
 
 app.listen(PORT, HOST, () => {
-  console.log(`Servidor operativo en http://${HOST}:${PORT}`);
+  console.log(`Servidor diagnóstico en http://${HOST}:${PORT}`);
 });
