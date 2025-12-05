@@ -130,15 +130,15 @@ app.post("/run", async (req, res) => {
     });
     await page.waitForTimeout(2000);
 
-    // 2) Click en el botón de comentarios si existe
+    // 2) Esperar el botón de comentarios y hacer click sí o sí
     try {
-      const commentButton = page.locator('[data-e2e="comment-icon"]');
-      if (await commentButton.first().isVisible()) {
-        await commentButton.first().click({ timeout: 8000 });
-        debugInfo.comment_icon_clicked = true;
-      } else {
-        debugInfo.comment_icon_visible = false;
-      }
+      await page.waitForSelector('[data-e2e="comment-icon"]', {
+        timeout: 10000,
+        state: "attached",
+      });
+      const commentButton = page.locator('[data-e2e="comment-icon"]').first();
+      await commentButton.click({ timeout: 8000 });
+      debugInfo.comment_icon_clicked = true;
     } catch (e) {
       debugInfo.comment_icon_click_error = e.message;
     }
@@ -153,7 +153,6 @@ app.post("/run", async (req, res) => {
       initialCount = await locator.count();
       if (initialCount > 0) break;
 
-      // scroll suave hacia abajo
       await page.mouse.wheel(0, 800);
       await page.waitForTimeout(800);
       loadScrolls++;
@@ -210,7 +209,10 @@ app.post("/run", async (req, res) => {
       if (foundComment) break;
 
       try {
-        await page.locator('[data-e2e="comment-level-1"]').last().scrollIntoViewIfNeeded();
+        await page
+          .locator('[data-e2e="comment-level-1"]')
+          .last()
+          .scrollIntoViewIfNeeded();
       } catch {
         break;
       }
