@@ -12,18 +12,24 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
+// Marker para verificar que ES ESTE ARCHIVO
+const MARKER = "NO_WAITFORSELECTOR_v2";
+
+// Paths y defaults
 const PORT = process.env.PORT || 8080;
 const HOST = "0.0.0.0";
 const STORAGE_DIR = process.env.STORAGE_DIR || path.join(__dirname, "local");
 const DEFAULT_STORAGE =
   process.env.STORAGE_STATE_PATH || path.join(STORAGE_DIR, "storageState.json");
 
+// Selección dinámica de archivo de cookies
 function storagePathForAccount(account) {
   if (!account) return DEFAULT_STORAGE;
   const specific = path.join(STORAGE_DIR, "accounts", `${account}.json`);
   return existsSync(specific) ? specific : DEFAULT_STORAGE;
 }
 
+// Lanzar navegador con perfil "humano"
 async function launchBrowser(storagePath) {
   const browser = await chromium.launch({
     headless: true,
@@ -47,10 +53,49 @@ async function launchBrowser(storagePath) {
   return { browser, page };
 }
 
+// Home
 app.get("/", (_, res) => {
-  res.json({ ok: true, message: "Servidor TikTok activo", time: new Date().toISOString() });
+  res.json({
+    ok: true,
+    marker: MARKER,
+    message: "Servidor de diagnóstico TikTok activo",
+    time: new Date().toISOString(),
+  });
 });
 
+// Verifica que las cookies funcionan y que entra a TikTok
+app.get("/check-login", async (req, res) => {
+  const storagePath = storagePathForAccount(req.query.account);
+  if (!existsSync(storagePath)) {
+    return res.json({ ok: false, error: "No existe storageState", storagePath });
+  }
+
+  try {
+    const { browser, page } = await launchBrowser(storagePath);
+    await page.goto("https://www.tiktok.com/", {
+      waitUntil: "domcontentloaded",
+      timeout: 20000,
+    });
+    await page.waitForTimeout(2000);
+
+    const currentUrl = page.url();
+    await browser.close();
+
+    const probablyLoggedIn = !/login/i.test(currentUrl);
+
+    return res.json({
+      ok: true,
+      marker: MARKER,
+      session: probablyLoggedIn ? "likely_logged_in" : "maybe_logged_out",
+      storagePath,
+      currentUrl,
+    });
+  } catch (err) {
+    return res.json({ ok: false, marker: MARKER, error: err.message });
+  }
+});
+
+// Debug DOM
 app.post("/debug-dom", async (req, res) => {
   const { video_url, account, search_text } = req.body;
 
@@ -65,7 +110,7 @@ app.post("/debug-dom", async (req, res) => {
 
   let browser;
   const debug = {
-    marker: "NO_WAITFORSELECTOR_v1",
+    marker: MARKER,
     video_url_requested: video_url,
     video_url_final: null,
     search_text: search_text || null,
@@ -82,7 +127,7 @@ app.post("/debug-dom", async (req, res) => {
     const { browser: b, page } = await launchBrowser(storagePath);
     browser = b;
 
-    // 1) Abrir video
+    // 1) Ir al vídeo
     try {
       await page.goto(video_url, { waitUntil: "domcontentloaded", timeout: 30000 });
       await page.waitForTimeout(2000);
@@ -128,8 +173,9 @@ app.post("/debug-dom", async (req, res) => {
       debug.steps.scroll_comments.error = e.message;
     }
 
-    // 4) DOM
+    // 4) Capturar DOM
     const MAX_HTML = 8000;
+
     let bodyHtml = "";
     try {
       bodyHtml = await page.innerHTML("body");
@@ -165,6 +211,6 @@ app.post("/debug-dom", async (req, res) => {
 });
 
 app.listen(PORT, HOST, () => {
-  console.log(`Servidor activo en http://${HOST}:${PORT}`);
+  console.log(`Servidor activo en http://${HOST}:${PORT} (${MARKER})`);
 });
 EOF
