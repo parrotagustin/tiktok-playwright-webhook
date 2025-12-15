@@ -48,11 +48,7 @@ async function launchBrowser(storagePath) {
 }
 
 app.get("/", (_, res) => {
-  res.json({
-    ok: true,
-    message: "Servidor TikTok activo",
-    time: new Date().toISOString(),
-  });
+  res.json({ ok: true, message: "Servidor TikTok activo", time: new Date().toISOString() });
 });
 
 app.post("/debug-dom", async (req, res) => {
@@ -69,6 +65,7 @@ app.post("/debug-dom", async (req, res) => {
 
   let browser;
   const debug = {
+    marker: "NO_WAITFORSELECTOR_v1",
     video_url_requested: video_url,
     video_url_final: null,
     search_text: search_text || null,
